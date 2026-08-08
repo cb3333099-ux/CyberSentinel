@@ -1,0 +1,222 @@
+{
+  "dataset": "/mnt/d/BDA/CyberSentinel/data/processed/ml-full/test",
+  "cold_start_latency_ms": 3303.233118999742,
+  "single_flow_latency_ms": {
+    "mean": 423.3711210499587,
+    "median": 419.3384289997084,
+    "p50": 419.3384289997084,
+    "p90": 587.8697697002281,
+    "p95": 594.5195123500071,
+    "p99": 603.9875491799194,
+    "min": 260.60733500071365,
+    "max": 608.7328349995005
+  },
+  "batch_throughput": [
+    {
+      "batch_size": 1,
+      "total_flows": 10000,
+      "total_time_sec": 2887.933776961,
+      "throughput_fps": 3.462683278881517,
+      "avg_ms_per_flow": 288.79337769610004,
+      "p95_batch_latency_ms": 347.1240128002136
+    },
+    {
+      "batch_size": 10,
+      "total_flows": 10000,
+      "total_time_sec": 292.4455738609995,
+      "throughput_fps": 34.1943968170742,
+      "avg_ms_per_flow": 29.24455738609995,
+      "p95_batch_latency_ms": 320.4398272497201
+    },
+    {
+      "batch_size": 50,
+      "total_flows": 10000,
+      "total_time_sec": 63.25070440899981,
+      "throughput_fps": 158.10100604313777,
+      "avg_ms_per_flow": 6.325070440899981,
+      "p95_batch_latency_ms": 348.88165894953994
+    },
+    {
+      "batch_size": 100,
+      "total_flows": 10000,
+      "total_time_sec": 34.21235089000038,
+      "throughput_fps": 292.2921032860916,
+      "avg_ms_per_flow": 3.421235089000038,
+      "p95_batch_latency_ms": 367.1420440498878
+    },
+    {
+      "batch_size": 500,
+      "total_flows": 10000,
+      "total_time_sec": 11.482313951999458,
+      "throughput_fps": 870.904596565108,
+      "avg_ms_per_flow": 1.1482313951999459,
+      "p95_batch_latency_ms": 600.7617154009495
+    },
+    {
+      "batch_size": 1000,
+      "total_flows": 10000,
+      "total_time_sec": 8.20875469099883,
+      "throughput_fps": 1218.2115773255264,
+      "avg_ms_per_flow": 0.8208754690998831,
+      "p95_batch_latency_ms": 875.3851867008962
+    }
+  ],
+  "stage_latency_ms": {
+    "stage1_mean": 247.09544038994864,
+    "stage2_mean": 282.222310479774,
+    "combined_mean": 554.5356287999675
+  },
+  "api_available": true,
+  "api_metrics": [
+    {
+      "endpoint": "/health",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 0.9575805000167747,
+      "median_ms": 0.9366744989165454,
+      "p95_ms": 1.1041546498745447,
+      "min_ms": 0.85353699978441,
+      "max_ms": 1.2450140002329135
+    },
+    {
+      "endpoint": "/api/metrics",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 6.451615999958449,
+      "median_ms": 6.203242000083264,
+      "p95_ms": 7.869347298856156,
+      "min_ms": 5.640282000968,
+      "max_ms": 9.00458399883064
+    },
+    {
+      "endpoint": "/api/metrics/status",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 1.9094094997853972,
+      "median_ms": 1.8719324998528464,
+      "p95_ms": 2.2305623501779337,
+      "min_ms": 1.671191999776056,
+      "max_ms": 2.3256639997271122
+    },
+    {
+      "endpoint": "/api/metrics/attacks",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 6.555040200146323,
+      "median_ms": 5.958739999186946,
+      "p95_ms": 8.806177799942821,
+      "min_ms": 5.422666999947978,
+      "max_ms": 15.400485001009656
+    },
+    {
+      "endpoint": "/api/metrics/severity",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 5.685288450058579,
+      "median_ms": 5.7056505011132685,
+      "p95_ms": 6.02968639905157,
+      "min_ms": 5.354990000341786,
+      "max_ms": 6.106890999944881
+    },
+    {
+      "endpoint": "/api/alerts?limit=100",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 5.249264300073264,
+      "median_ms": 5.2083455011597835,
+      "p95_ms": 5.52273934972618,
+      "min_ms": 4.891922000751947,
+      "max_ms": 5.890111000553588
+    },
+    {
+      "endpoint": "/api/alerts?limit=1000",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 21.342069400088803,
+      "median_ms": 21.359572000619664,
+      "p95_ms": 22.451419100343628,
+      "min_ms": 19.803268000032404,
+      "max_ms": 22.54615499987267
+    },
+    {
+      "endpoint": "/api/alerts?limit=5000",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 31.602706300145655,
+      "median_ms": 30.127037500278675,
+      "p95_ms": 37.21954165075658,
+      "min_ms": 29.217979999884847,
+      "max_ms": 39.495601999078644
+    },
+    {
+      "endpoint": "/api/alerts?severity=CRITICAL&limit=100",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 8.99115409984006,
+      "median_ms": 8.823025999845413,
+      "p95_ms": 10.057879900068656,
+      "min_ms": 8.281436001198017,
+      "max_ms": 10.432577000756282
+    },
+    {
+      "endpoint": "/api/alerts?severity=HIGH&limit=100",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 9.753457350143435,
+      "median_ms": 9.111362999647099,
+      "p95_ms": 12.90040450094239,
+      "min_ms": 8.081297000899212,
+      "max_ms": 17.99623300030362
+    },
+    {
+      "endpoint": "/api/alerts?attack_type=DDOS%20attack-HOIC&limit=100",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 7.040718099779042,
+      "median_ms": 6.914722999681544,
+      "p95_ms": 7.961030299520645,
+      "min_ms": 6.447620999097126,
+      "max_ms": 8.794395000222721
+    },
+    {
+      "endpoint": "/api/alerts?attack_type=Brute%20Force%20-Web&limit=100",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 9.028631699948164,
+      "median_ms": 8.394723000492377,
+      "p95_ms": 10.56027999911749,
+      "min_ms": 7.956315999763319,
+      "max_ms": 19.16175100086548
+    },
+    {
+      "endpoint": "/api/alerts?status=NEW&limit=100",
+      "request_count": 20,
+      "success_count": 20,
+      "fail_count": 0,
+      "mean_ms": 5.606673800230055,
+      "median_ms": 5.555626999921515,
+      "p95_ms": 6.1517798990280435,
+      "min_ms": 4.918702999930247,
+      "max_ms": 6.7954030000692
+    }
+  ],
+  "resource_usage": {
+    "memory_before_mb": 131.34765625,
+    "memory_after_mb": 207.07421875,
+    "peak_memory_mb": 207.07421875
+  },
+  "accuracy_regression_passed": true,
+  "total_benchmark_execution_time_sec": 3497.162674188614
+}

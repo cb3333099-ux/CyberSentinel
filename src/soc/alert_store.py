@@ -10,6 +10,9 @@ import pandas as pd
 # CONFIGURATION
 # ============================================================
 
+DEFAULT_ALERT_LIMIT = 5000
+MAX_ALERT_LIMIT = 10000
+
 DB_DIR = Path(
     "/home/charay/cybersentinel-data/soc"
 )
@@ -344,44 +347,43 @@ def sync_alerts(
 
 def get_alerts(
     status: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Return alerts from the database.
 
-    Optional status filtering is supported.
+    Optional status filtering and limit are supported.
     """
 
     initialize_database()
 
     connection = get_connection()
 
+    params = []
+    where_clauses = []
+
     if status:
+        where_clauses.append("status = ?")
+        params.append(status)
 
-        query = """
-            SELECT *
-            FROM alerts
-            WHERE status = ?
-            ORDER BY timestamp DESC
-        """
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-        dataframe = pd.read_sql_query(
-            query,
-            connection,
-            params=(status,),
-        )
+    query = f"""
+        SELECT *
+        FROM alerts
+        {where_sql}
+        ORDER BY timestamp DESC
+    """
 
-    else:
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
 
-        query = """
-            SELECT *
-            FROM alerts
-            ORDER BY timestamp DESC
-        """
-
-        dataframe = pd.read_sql_query(
-            query,
-            connection,
-        )
+    dataframe = pd.read_sql_query(
+        query,
+        connection,
+        params=tuple(params) if params else None,
+    )
 
     connection.close()
 

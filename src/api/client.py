@@ -6,6 +6,8 @@ import requests
 # ============================================================
 
 API_BASE_URL = "http://localhost:8000"
+DEFAULT_ALERT_LIMIT = 5000
+MAX_ALERT_LIMIT = 10000
 
 
 # ============================================================
@@ -101,7 +103,7 @@ def get_alerts(
     status=None,
     severity=None,
     attack_type=None,
-    limit=100,
+    limit=DEFAULT_ALERT_LIMIT,
 ):
     """
     Retrieve alerts from the SOC API.

@@ -1,0 +1,78 @@
+============================================================
+CYBERSENTINEL MODEL EVALUATION
+============================================================
+
+Dataset:
+/mnt/d/BDA/CyberSentinel/data/processed/ml-full/test
+
+Total Test Samples : 3,247,598
+Benign Samples     : 2,697,619
+Attack Samples     : 549,979
+
+------------------------------------------------------------
+STAGE-1 ATTACK DETECTION
+------------------------------------------------------------
+
+Accuracy           : 98.93%
+Precision          : 99.15%
+Recall             : 94.49%
+F1 Score           : 96.76%
+
+True Positives     : 519,661
+True Negatives     : 2,693,173
+False Positives    : 4,446
+False Negatives    : 30,318
+
+False Positive Rate: 0.16%
+False Negative Rate: 5.51%
+
+------------------------------------------------------------
+STAGE-2 ATTACK CLASSIFICATION
+------------------------------------------------------------
+
+Accuracy           : 97.00%
+Macro Precision    : 92.21%
+Macro Recall       : 82.78%
+Macro F1           : 84.58%
+
+Weighted Precision : 97.23%
+Weighted Recall    : 97.00%
+Weighted F1        : 96.83%
+
+------------------------------------------------------------
+PER-CLASS PERFORMANCE
+------------------------------------------------------------
+
+Attack Type                  Precision   Recall    F1        Support 
+
+DDOS attack-HOIC             99.97%      99.96%    99.97%    137,020 
+DDoS attacks-LOIC-HTTP       99.94%      99.88%    99.91%    115,236 
+DoS attacks-Hulk             100.00%     100.00%   100.00%   92,773  
+Bot                          99.90%      99.97%    99.93%    57,176  
+FTP-BruteForce               73.04%      93.16%    81.88%    38,850  
+SSH-Bruteforce               100.00%     99.96%    99.98%    37,258  
+Infilteration                99.47%      99.50%    99.49%    32,759  
+DoS attacks-SlowHTTPTest     84.53%      52.13%    64.49%    27,891  
+DoS attacks-GoldenEye        99.98%      99.98%    99.98%    8,300   
+DoS attacks-Slowloris        99.95%      99.27%    99.61%    2,183   
+DDOS attack-LOIC-UDP         70.78%      100.00%   82.89%    327     
+Brute Force -Web             96.74%      60.96%    74.79%    146     
+Brute Force -XSS             100.00%     37.50%    54.55%    48      
+SQL Injection                66.67%      16.67%    26.67%    12      
+
+------------------------------------------------------------
+END-TO-END PIPELINE
+------------------------------------------------------------
+
+Overall Pipeline Accuracy : 98.43%
+Attack Detection Accuracy : 94.49%
+Attack Classification     : 96.87%
+
+------------------------------------------------------------
+CONFIDENCE
+------------------------------------------------------------
+
+Stage-1 Mean Confidence : 97.44%
+Stage-2 Mean Confidence : 94.18%
+
+============================================================

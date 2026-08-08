@@ -1,6 +1,9 @@
+# src/api/main.py
+
 from typing import Optional
 
 import pandas as pd
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -18,6 +21,8 @@ from src.soc.alert_store import (
 
 APP_NAME = "CyberSentinel SOC API"
 APP_VERSION = "1.0.0"
+DEFAULT_ALERT_LIMIT = 5000
+MAX_ALERT_LIMIT = 10000
 
 
 # ============================================================
@@ -44,329 +49,11 @@ class StatusUpdate(BaseModel):
 
 
 # ============================================================
-# HELPERS
-# ============================================================
-
-def clean_value(value):
-    """
-    Convert pandas / NumPy values into
-    JSON-safe Python values.
-    """
-
-    if value is None:
-        return None
-
-    try:
-        if pd.isna(value):
-            return None
-    except Exception:
-        pass
-
-    if hasattr(value, "item"):
-        try:
-            return value.item()
-        except Exception:
-            pass
-
-    if isinstance(value, pd.Timestamp):
-        return str(value)
-
-    return value
-
-
-def serialize_alert(alert):
-    """
-    Convert an alert returned from SQLite
-    into the canonical CyberSentinel API format.
-
-    Database fields:
-        confidence
-        destination_port
-        protocol
-
-    API fields:
-        attack_probability
-        model_confidence
-        dst_port
-        protocol
-    """
-
-    if alert is None:
-        return None
-
-    # --------------------------------------------------------
-    # SQLite Row
-    # --------------------------------------------------------
-
-    if hasattr(alert, "keys") and not isinstance(
-        alert,
-        pd.DataFrame,
-    ):
-
-        try:
-            data = dict(alert)
-        except Exception:
-            data = {}
-
-    # --------------------------------------------------------
-    # Pandas Series
-    # --------------------------------------------------------
-
-    elif isinstance(alert, pd.Series):
-
-        data = alert.to_dict()
-
-    # --------------------------------------------------------
-    # Dictionary
-    # --------------------------------------------------------
-
-    elif isinstance(alert, dict):
-
-        data = dict(alert)
-
-    # --------------------------------------------------------
-    # Generic object
-    # --------------------------------------------------------
-
-    else:
-
-        try:
-            data = dict(alert)
-        except Exception:
-            return None
-
-    # --------------------------------------------------------
-    # Database fields
-    # --------------------------------------------------------
-
-    alert_id = data.get(
-        "alert_id"
-    )
-
-    timestamp = data.get(
-        "timestamp"
-    )
-
-    attack_type = data.get(
-        "attack_type",
-        "Unknown",
-    )
-
-    severity = data.get(
-        "severity",
-        "UNKNOWN",
-    )
-
-    confidence = data.get(
-        "confidence"
-    )
-
-    destination_port = data.get(
-        "destination_port"
-    )
-
-    protocol = data.get(
-        "protocol",
-        "Unknown",
-    )
-
-    status = data.get(
-        "status",
-        "NEW",
-    )
-
-    # --------------------------------------------------------
-    # Confidence normalization
-    # --------------------------------------------------------
-
-    confidence = clean_value(
-        confidence
-    )
-
-    if confidence is None:
-        confidence = 0.0
-
-    try:
-        confidence = float(
-            confidence
-        )
-    except (
-        TypeError,
-        ValueError,
-    ):
-        confidence = 0.0
-
-    # --------------------------------------------------------
-    # Destination port normalization
-    # --------------------------------------------------------
-
-    destination_port = clean_value(
-        destination_port
-    )
-
-    if destination_port is not None:
-
-        try:
-            destination_port = int(
-                float(destination_port)
-            )
-        except (
-            TypeError,
-            ValueError,
-        ):
-            destination_port = None
-
-    # --------------------------------------------------------
-    # Timestamp normalization
-    # --------------------------------------------------------
-
-    timestamp = clean_value(
-        timestamp
-    )
-
-    if timestamp is not None:
-
-        timestamp = str(
-            timestamp
-        )
-
-    # --------------------------------------------------------
-    # Canonical API response
-    # --------------------------------------------------------
-
-    return {
-        "alert_id": clean_value(
-            alert_id
-        ),
-
-        "timestamp": timestamp,
-
-        "attack_type": str(
-            attack_type
-            if attack_type is not None
-            else "Unknown"
-        ),
-
-        "severity": str(
-            severity
-            if severity is not None
-            else "UNKNOWN"
-        ).upper(),
-
-        "attack_probability": confidence,
-
-        "model_confidence": confidence,
-
-        "dst_port": destination_port,
-
-        "protocol": str(
-            protocol
-            if protocol is not None
-            else "Unknown"
-        ),
-
-        "status": str(
-            status
-            if status is not None
-            else "NEW"
-        ).upper(),
-
-        # Original database names retained
-        # for backwards compatibility.
-        "confidence": confidence,
-
-        "destination_port": destination_port,
-    }
-
-
-def serialize_dataframe(dataframe):
-    """
-    Serialize a pandas DataFrame containing alerts.
-    """
-
-    if dataframe is None:
-        return []
-
-    if dataframe.empty:
-        return []
-
-    alerts = []
-
-    for _, row in dataframe.iterrows():
-
-        alert = serialize_alert(
-            row
-        )
-
-        if alert is not None:
-
-            alerts.append(
-                alert
-            )
-
-    return alerts
-
-
-def filter_dataframe(
-    dataframe,
-    severity=None,
-    attack_type=None,
-):
-    """
-    Apply optional API filters.
-    """
-
-    if dataframe is None:
-        return pd.DataFrame()
-
-    if dataframe.empty:
-        return dataframe
-
-    result = dataframe.copy()
-
-    # --------------------------------------------------------
-    # Severity filter
-    # --------------------------------------------------------
-
-    if severity:
-
-        if "severity" in result.columns:
-
-            result = result[
-                result["severity"]
-                .astype(str)
-                .str.upper()
-                ==
-                severity.upper()
-            ]
-
-    # --------------------------------------------------------
-    # Attack type filter
-    # --------------------------------------------------------
-
-    if attack_type:
-
-        if "attack_type" in result.columns:
-
-            result = result[
-                result["attack_type"]
-                .astype(str)
-                ==
-                attack_type
-            ]
-
-    return result
-
-
-# ============================================================
-# ROOT
+# HEALTH CHECK
 # ============================================================
 
 @app.get("/")
 def root():
-    """
-    API root endpoint.
-    """
 
     return {
         "name": APP_NAME,
@@ -375,15 +62,8 @@ def root():
     }
 
 
-# ============================================================
-# HEALTH
-# ============================================================
-
 @app.get("/health")
 def health():
-    """
-    Health check endpoint.
-    """
 
     return {
         "status": "healthy",
@@ -392,7 +72,7 @@ def health():
 
 
 # ============================================================
-# ALERTS
+# ALERT ENDPOINTS
 # ============================================================
 
 @app.get("/api/alerts")
@@ -400,15 +80,8 @@ def list_alerts(
     status: Optional[str] = None,
     severity: Optional[str] = None,
     attack_type: Optional[str] = None,
-    limit: int = 100,
+    limit: int = DEFAULT_ALERT_LIMIT,
 ):
-    """
-    Return SOC alerts with optional filtering.
-    """
-
-    # --------------------------------------------------------
-    # Validate limit
-    # --------------------------------------------------------
 
     if limit < 1:
 
@@ -417,49 +90,63 @@ def list_alerts(
             detail="limit must be greater than 0",
         )
 
-    if limit > 1000:
+    if limit > MAX_ALERT_LIMIT:
 
         raise HTTPException(
             status_code=400,
-            detail="limit cannot exceed 1000",
+            detail=f"limit cannot exceed {MAX_ALERT_LIMIT}",
         )
 
-    # --------------------------------------------------------
-    # Load alerts
-    # --------------------------------------------------------
+    fetch_limit = limit if (not severity and not attack_type) else None
 
     dataframe = get_alerts(
         status=status,
+        limit=fetch_limit,
     )
 
-    if dataframe is None or dataframe.empty:
+
+    if dataframe.empty:
 
         return {
             "count": 0,
             "alerts": [],
         }
 
-    # --------------------------------------------------------
-    # Filters
-    # --------------------------------------------------------
 
-    dataframe = filter_dataframe(
-        dataframe,
-        severity=severity,
-        attack_type=attack_type,
-    )
+    if severity:
 
-    # --------------------------------------------------------
-    # Limit
-    # --------------------------------------------------------
+        dataframe = dataframe[
+            dataframe["severity"]
+            .astype(str)
+            .str.upper()
+            == severity.upper()
+        ]
+
+
+    if attack_type:
+
+        dataframe = dataframe[
+            dataframe["attack_type"]
+            .astype(str)
+            == attack_type
+        ]
+
 
     dataframe = dataframe.head(
         limit
     )
 
-    alerts = serialize_dataframe(
-        dataframe
+
+    dataframe = dataframe.where(
+        pd.notna(dataframe),
+        None,
     )
+
+
+    alerts = dataframe.to_dict(
+        orient="records"
+    )
+
 
     return {
         "count": len(alerts),
@@ -469,117 +156,41 @@ def list_alerts(
 
 # ============================================================
 # RECENT ALERTS
-#
-# IMPORTANT:
-# This route MUST appear BEFORE
-# /api/alerts/{alert_id}
-#
-# Otherwise FastAPI can interpret
-# "recent" as alert_id="recent".
 # ============================================================
 
 @app.get("/api/alerts/recent")
 def recent_alerts(
-    limit: int = 10,
+    limit: int = 20,
 ):
-    """
-    Return the most recent SOC alerts.
-    """
-
-    # --------------------------------------------------------
-    # Validate limit
-    # --------------------------------------------------------
-
     if limit < 1:
-
         raise HTTPException(
             status_code=400,
             detail="limit must be greater than 0",
         )
 
-    if limit > 100:
-
+    if limit > MAX_ALERT_LIMIT:
         raise HTTPException(
             status_code=400,
-            detail="limit cannot exceed 100",
+            detail=f"limit cannot exceed {MAX_ALERT_LIMIT}",
         )
 
-    # --------------------------------------------------------
-    # Load alerts
-    # --------------------------------------------------------
+    dataframe = get_alerts(
+        limit=limit,
+    )
 
-    dataframe = get_alerts()
-
-    if dataframe is None or dataframe.empty:
-
+    if dataframe.empty:
         return {
             "count": 0,
             "alerts": [],
         }
 
-    dataframe = dataframe.copy()
-
-    # --------------------------------------------------------
-    # Sort by timestamp
-    # --------------------------------------------------------
-
-    if "timestamp" in dataframe.columns:
-
-        dataframe["_sort_timestamp"] = (
-            pd.to_datetime(
-                dataframe["timestamp"],
-                errors="coerce",
-            )
-        )
-
-        dataframe = dataframe.sort_values(
-            "_sort_timestamp",
-            ascending=False,
-            na_position="last",
-        )
-
-        dataframe = dataframe.drop(
-            columns=[
-                "_sort_timestamp"
-            ]
-        )
-
-    # --------------------------------------------------------
-    # Fallback to created_at if timestamp
-    # is unavailable.
-    # --------------------------------------------------------
-
-    elif "created_at" in dataframe.columns:
-
-        dataframe["_sort_created"] = (
-            pd.to_datetime(
-                dataframe["created_at"],
-                errors="coerce",
-            )
-        )
-
-        dataframe = dataframe.sort_values(
-            "_sort_created",
-            ascending=False,
-            na_position="last",
-        )
-
-        dataframe = dataframe.drop(
-            columns=[
-                "_sort_created"
-            ]
-        )
-
-    # --------------------------------------------------------
-    # Limit results
-    # --------------------------------------------------------
-
-    dataframe = dataframe.head(
-        limit
+    dataframe = dataframe.where(
+        pd.notna(dataframe),
+        None,
     )
 
-    alerts = serialize_dataframe(
-        dataframe
+    alerts = dataframe.to_dict(
+        orient="records"
     )
 
     return {
@@ -590,17 +201,12 @@ def recent_alerts(
 
 # ============================================================
 # SINGLE ALERT
-#
-# This MUST remain AFTER /recent.
 # ============================================================
 
 @app.get("/api/alerts/{alert_id}")
 def single_alert(
     alert_id: str,
 ):
-    """
-    Return a single alert by ID.
-    """
 
     alert = get_alert(
         alert_id
@@ -613,18 +219,9 @@ def single_alert(
             detail="Alert not found",
         )
 
-    serialized = serialize_alert(
-        alert
-    )
-
-    if serialized is None:
-
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to serialize alert",
-        )
-
-    return serialized
+    return {
+        "alert": alert,
+    }
 
 
 # ============================================================
@@ -636,9 +233,6 @@ def change_alert_status(
     alert_id: str,
     payload: StatusUpdate,
 ):
-    """
-    Update an alert's SOC workflow status.
-    """
 
     status = payload.status.upper()
 
@@ -649,9 +243,6 @@ def change_alert_status(
         "RESOLVED",
     }
 
-    # --------------------------------------------------------
-    # Validate status
-    # --------------------------------------------------------
 
     if status not in valid_statuses:
 
@@ -664,13 +255,11 @@ def change_alert_status(
             ),
         )
 
-    # --------------------------------------------------------
-    # Check alert exists
-    # --------------------------------------------------------
 
     alert = get_alert(
         alert_id
     )
+
 
     if alert is None:
 
@@ -679,14 +268,12 @@ def change_alert_status(
             detail="Alert not found",
         )
 
-    # --------------------------------------------------------
-    # Update status
-    # --------------------------------------------------------
 
     updated = update_status(
         alert_id,
         status,
     )
+
 
     if not updated:
 
@@ -695,33 +282,27 @@ def change_alert_status(
             detail="Failed to update alert",
         )
 
-    # --------------------------------------------------------
-    # Retrieve updated alert
-    # --------------------------------------------------------
 
     updated_alert = get_alert(
         alert_id
     )
 
+
     return {
         "message": "Alert status updated",
-        "alert": serialize_alert(
-            updated_alert
-        ),
+        "alert": updated_alert,
     }
 
 
 # ============================================================
-# STATUS METRICS
+# STATUS COUNTS
 # ============================================================
 
 @app.get("/api/metrics/status")
 def status_metrics():
-    """
-    Return alert workflow status counts.
-    """
 
     dataframe = get_status_counts()
+
 
     counts = {
         "NEW": 0,
@@ -730,21 +311,21 @@ def status_metrics():
         "RESOLVED": 0,
     }
 
-    if dataframe is not None:
 
-        if not dataframe.empty:
+    if not dataframe.empty:
 
-            for _, row in dataframe.iterrows():
+        for _, row in dataframe.iterrows():
 
-                status = str(
-                    row["status"]
-                ).upper()
+            status = str(
+                row["status"]
+            ).upper()
 
-                if status in counts:
+            if status in counts:
 
-                    counts[status] = int(
-                        row["count"]
-                    )
+                counts[status] = int(
+                    row["count"]
+                )
+
 
     return {
         "total": sum(
@@ -760,108 +341,120 @@ def status_metrics():
 
 @app.get("/api/metrics")
 def soc_metrics():
-    """
-    Return overall SOC metrics.
-    """
 
     dataframe = get_alerts()
 
-    if dataframe is None or dataframe.empty:
+
+    if dataframe.empty:
 
         return {
             "total_alerts": 0,
             "critical_alerts": 0,
             "high_alerts": 0,
+            "medium_alerts": 0,
+            "low_alerts": 0,
+            "average_confidence": 0,
             "attack_types": 0,
-            "average_confidence": 0.0,
         }
 
-    # --------------------------------------------------------
-    # Total alerts
-    # --------------------------------------------------------
 
     total_alerts = len(
         dataframe
     )
 
-    # --------------------------------------------------------
-    # Severity
-    # --------------------------------------------------------
 
-    if "severity" in dataframe.columns:
+    severity_series = (
+        dataframe["severity"]
+        .astype(str)
+        .str.upper()
+    )
 
-        severity_series = (
-            dataframe["severity"]
-            .astype(str)
-            .str.upper()
-        )
 
-        critical_alerts = int(
-            (
-                severity_series
-                == "CRITICAL"
-            ).sum()
-        )
+    critical_alerts = int(
+        (
+            severity_series
+            == "CRITICAL"
+        ).sum()
+    )
 
-        high_alerts = int(
-            (
-                severity_series
-                == "HIGH"
-            ).sum()
-        )
 
-    else:
+    high_alerts = int(
+        (
+            severity_series
+            == "HIGH"
+        ).sum()
+    )
 
-        critical_alerts = 0
-        high_alerts = 0
 
-    # --------------------------------------------------------
-    # Attack types
-    # --------------------------------------------------------
+    medium_alerts = int(
+        (
+            severity_series
+            == "MEDIUM"
+        ).sum()
+    )
 
-    if "attack_type" in dataframe.columns:
 
-        attack_types = int(
-            dataframe["attack_type"]
-            .dropna()
-            .astype(str)
-            .nunique()
-        )
+    low_alerts = int(
+        (
+            severity_series
+            == "LOW"
+        ).sum()
+    )
 
-    else:
 
-        attack_types = 0
+    confidence = pd.to_numeric(
+        dataframe["confidence"],
+        errors="coerce",
+    )
 
-    # --------------------------------------------------------
-    # Average confidence
-    # --------------------------------------------------------
 
-    if "confidence" in dataframe.columns:
+    average_confidence = (
+        confidence
+        .dropna()
+        .mean()
+    )
 
-        confidence = pd.to_numeric(
-            dataframe["confidence"],
-            errors="coerce",
-        )
 
-        average_confidence = float(
-            confidence
-            .fillna(0)
-            .mean()
-        )
-
-    else:
+    if pd.isna(
+        average_confidence
+    ):
 
         average_confidence = 0.0
 
+
+    attack_types = (
+        dataframe["attack_type"]
+        .dropna()
+        .astype(str)
+        .nunique()
+    )
+
+
     return {
-        "total_alerts": total_alerts,
-        "critical_alerts": critical_alerts,
-        "high_alerts": high_alerts,
-        "attack_types": attack_types,
-        "average_confidence": round(
-            average_confidence,
-            4,
-        ),
+        "total_alerts":
+            total_alerts,
+
+        "critical_alerts":
+            critical_alerts,
+
+        "high_alerts":
+            high_alerts,
+
+        "medium_alerts":
+            medium_alerts,
+
+        "low_alerts":
+            low_alerts,
+
+        "average_confidence":
+            float(
+                average_confidence
+            ),
+
+        "attack_types":
+            int(
+                attack_types
+            ),
     }
 
 
@@ -871,34 +464,19 @@ def soc_metrics():
 
 @app.get("/api/metrics/attacks")
 def attack_metrics():
-    """
-    Return alert counts grouped by attack type.
-    """
-
     dataframe = get_alerts()
 
-    if dataframe is None or dataframe.empty:
-
+    if dataframe.empty:
         return []
 
-    if "attack_type" not in dataframe.columns:
-
-        return []
-
-    result = (
-        dataframe["attack_type"]
-        .fillna("Unknown")
-        .astype(str)
-        .value_counts()
-        .reset_index()
+    counts = (
+        dataframe.groupby("attack_type")
+        .size()
+        .reset_index(name="count")
+        .sort_values(by="count", ascending=False)
     )
 
-    result.columns = [
-        "attack_type",
-        "count",
-    ]
-
-    return result.to_dict(
+    return counts.to_dict(
         orient="records"
     )
 
@@ -909,50 +487,18 @@ def attack_metrics():
 
 @app.get("/api/metrics/severity")
 def severity_metrics():
-    """
-    Return alert counts grouped by severity.
-    """
-
     dataframe = get_alerts()
 
-    if dataframe is None or dataframe.empty:
-
+    if dataframe.empty:
         return []
 
-    if "severity" not in dataframe.columns:
-
-        return []
-
-    result = (
-        dataframe["severity"]
-        .fillna("UNKNOWN")
-        .astype(str)
-        .str.upper()
-        .value_counts()
-        .reset_index()
+    counts = (
+        dataframe.groupby("severity")
+        .size()
+        .reset_index(name="count")
+        .sort_values(by="count", ascending=False)
     )
 
-    result.columns = [
-        "severity",
-        "count",
-    ]
-
-    return result.to_dict(
+    return counts.to_dict(
         orient="records"
-    )
-
-
-# ============================================================
-# APPLICATION ENTRY POINT
-# ============================================================
-
-if __name__ == "__main__":
-
-    import uvicorn
-
-    uvicorn.run(
-        "src.api.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=False,
     )

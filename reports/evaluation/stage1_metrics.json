@@ -1,0 +1,32 @@
+{
+  "total_samples": 3247598,
+  "benign_samples": 2697619,
+  "attack_samples": 549979,
+  "accuracy": 0.9892954731466148,
+  "precision": 0.9915169993913456,
+  "recall": 0.9448742588353374,
+  "f1_score": 0.9676338766169562,
+  "true_positives": 519661,
+  "true_negatives": 2693173,
+  "false_positives": 4446,
+  "false_negatives": 30318,
+  "false_positive_rate": 0.0016481200643975297,
+  "false_negative_rate": 0.05512574116466265,
+  "confidence": {
+    "overall": {
+      "mean": 0.974418777205882,
+      "min": 0.5000736414527467,
+      "max": 0.9991142182133225
+    },
+    "correct": {
+      "mean": 0.9753731094581715,
+      "min": 0.5000736414527467,
+      "max": 0.9991142182133225
+    },
+    "incorrect": {
+      "mean": 0.8862208970007278,
+      "min": 0.500179732310698,
+      "max": 0.9918607583413421
+    }
+  }
+}
