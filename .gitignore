@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+.venv-linux/
+*.venv/
+
+# Data
+data/raw/
+data/processed/
+data/streaming/
+
+# Large generated data outside project
+*.csv
+*.parquet
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Generated analytics/model outputs
+models/
+*.pkl
+*.joblib
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
