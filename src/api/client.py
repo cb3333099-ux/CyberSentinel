@@ -6,7 +6,7 @@ import requests
 # ============================================================
 
 API_BASE_URL = "http://localhost:8000"
-DEFAULT_ALERT_LIMIT = 5000
+DEFAULT_ALERT_LIMIT = 10000
 MAX_ALERT_LIMIT = 10000
 
 
@@ -480,6 +480,19 @@ if __name__ == "__main__":
     # --------------------------------------------------------
     # Health
     # --------------------------------------------------------
+
+# ============================================================
+# REPLAY HISTORY
+# ============================================================
+
+def get_replays():
+    data = _request("GET", "/api/replays")
+    return data.get("replays", [])
+
+
+def get_replay(replay_id: str):
+    return _request("GET", f"/api/replays/{replay_id}")
+
 
     health = get_health()
 

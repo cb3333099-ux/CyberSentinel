@@ -10,7 +10,7 @@ import pandas as pd
 # CONFIGURATION
 # ============================================================
 
-DEFAULT_ALERT_LIMIT = 5000
+DEFAULT_ALERT_LIMIT = 10000
 MAX_ALERT_LIMIT = 10000
 
 DB_DIR = Path(
@@ -36,10 +36,15 @@ def get_connection():
 
     connection = sqlite3.connect(
         DB_PATH,
+        timeout=60.0,
         check_same_thread=False,
     )
 
     connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
 
     return connection
 
@@ -50,32 +55,65 @@ def get_connection():
 
 def initialize_database():
     """
-    Create the alert-management table if it does not exist.
+    Create the alert-management and replay-history tables if they do not exist.
     """
+    import time
+    for attempt in range(5):
+        try:
+            connection = get_connection()
+            cursor = connection.cursor()
 
-    connection = get_connection()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS alerts (
+                    alert_id TEXT PRIMARY KEY,
+                    timestamp TEXT,
+                    attack_type TEXT,
+                    severity TEXT,
+                    confidence REAL,
+                    destination_port INTEGER,
+                    protocol TEXT,
+                    status TEXT NOT NULL DEFAULT 'NEW',
+                    replay_run_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
 
-    cursor = connection.cursor()
+            # Check if replay_run_id column exists for existing database instances
+            cursor.execute("PRAGMA table_info(alerts)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "replay_run_id" not in columns:
+                try:
+                    cursor.execute("ALTER TABLE alerts ADD COLUMN replay_run_id TEXT")
+                except Exception:
+                    pass
 
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS alerts (
-            alert_id TEXT PRIMARY KEY,
-            timestamp TEXT,
-            attack_type TEXT,
-            severity TEXT,
-            confidence REAL,
-            destination_port INTEGER,
-            protocol TEXT,
-            status TEXT NOT NULL DEFAULT 'NEW',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS replay_history (
+                    replay_id TEXT PRIMARY KEY,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    flows_requested INTEGER NOT NULL,
+                    flows_processed INTEGER NOT NULL,
+                    gt_benign INTEGER NOT NULL,
+                    gt_attacks INTEGER NOT NULL,
+                    pred_benign INTEGER NOT NULL,
+                    pred_attacks INTEGER NOT NULL,
+                    alerts_inserted INTEGER NOT NULL,
+                    throughput REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'COMPLETED'
+                )
+                """
+            )
 
-    connection.commit()
-    connection.close()
+            connection.commit()
+            connection.close()
+            break
+        except sqlite3.OperationalError:
+            time.sleep(0.5)
 
 
 # ============================================================
@@ -529,8 +567,159 @@ def get_status_counts():
 
 
 # ============================================================
-# DATABASE RESET
+# REPLAY HISTORY FUNCTIONS
 # ============================================================
+
+def record_replay_run(data: dict):
+    """
+    Record or update a historical SOC replay run.
+    """
+    initialize_database()
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO replay_history (
+            replay_id, start_time, end_time, flows_requested, flows_processed,
+            gt_benign, gt_attacks, pred_benign, pred_attacks, alerts_inserted, throughput, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(replay_id) DO UPDATE SET
+            end_time = excluded.end_time,
+            flows_requested = excluded.flows_requested,
+            flows_processed = excluded.flows_processed,
+            gt_benign = excluded.gt_benign,
+            gt_attacks = excluded.gt_attacks,
+            pred_benign = excluded.pred_benign,
+            pred_attacks = excluded.pred_attacks,
+            alerts_inserted = excluded.alerts_inserted,
+            throughput = excluded.throughput,
+            status = excluded.status
+        """,
+        (
+            data["replay_id"],
+            data.get("start_time", pd.Timestamp.now(tz="UTC").isoformat()),
+            data.get("end_time", pd.Timestamp.now(tz="UTC").isoformat()),
+            data.get("flows_requested", 0),
+            data.get("flows_processed", 0),
+            data.get("gt_benign", 0),
+            data.get("gt_attacks", 0),
+            data.get("pred_benign", 0),
+            data.get("pred_attacks", 0),
+            data.get("alerts_inserted", 0),
+            float(data.get("throughput", 0.0)),
+            data.get("status", "COMPLETED"),
+        ),
+    )
+
+    connection.commit()
+    connection.close()
+
+
+def get_replay_run(replay_id: str) -> Optional[dict]:
+    """
+    Retrieve a specific replay run record by replay_id.
+    """
+    initialize_database()
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("SELECT * FROM replay_history WHERE replay_id = ?", (replay_id,))
+    row = cursor.fetchone()
+    connection.close()
+
+    if row is not None:
+        return dict(row)
+    return None
+
+
+def get_replay_history() -> pd.DataFrame:
+    """
+    Retrieve all recorded replay runs ordered by start time.
+    """
+    initialize_database()
+    connection = get_connection()
+
+    query = """
+        SELECT
+            replay_id,
+            start_time,
+            end_time,
+            flows_requested,
+            flows_processed,
+            gt_benign,
+            gt_attacks,
+            pred_benign,
+            pred_attacks,
+            alerts_inserted,
+            throughput,
+            status
+        FROM replay_history
+        ORDER BY start_time DESC
+    """
+
+    dataframe = pd.read_sql_query(query, connection)
+    connection.close()
+    return dataframe
+
+
+def backup_and_reset_soc_alerts(confirm: bool = False) -> dict:
+    """
+    Safely backup database file and reset ONLY the operational alerts table.
+    Preserves replay_history table and all historical replay records.
+    """
+    if not confirm:
+        raise ValueError("Confirmation flag required to reset operational SOC alerts.")
+
+    initialize_database()
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    # Pre-reset counts
+    cursor.execute("SELECT COUNT(*) FROM alerts")
+    pre_total_alerts = cursor.fetchone()[0]
+
+    cursor.execute("SELECT status, COUNT(*) FROM alerts GROUP BY status")
+    pre_status_dist = dict(cursor.fetchall())
+
+    cursor.execute("SELECT COUNT(*) FROM replay_history")
+    pre_replays_count = cursor.fetchone()[0]
+
+    connection.close()
+
+    # Create backup copy
+    import shutil
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_filename = f"alerts_backup_before_demo_20k_{timestamp}.db"
+    backup_path = DB_DIR / backup_filename
+
+    if DB_PATH.exists():
+        shutil.copy2(DB_PATH, backup_path)
+
+    # Perform DELETE FROM alerts only
+    conn_reset = get_connection()
+    cur_reset = conn_reset.cursor()
+    cur_reset.execute("DELETE FROM alerts")
+    conn_reset.commit()
+
+    cur_reset.execute("SELECT COUNT(*) FROM alerts")
+    post_alerts_count = cur_reset.fetchone()[0]
+
+    cur_reset.execute("SELECT COUNT(*) FROM replay_history")
+    post_replays_count = cur_reset.fetchone()[0]
+    conn_reset.close()
+
+    return {
+        "backup_path": str(backup_path),
+        "pre_total_alerts": pre_total_alerts,
+        "pre_status_dist": pre_status_dist,
+        "pre_replays_count": pre_replays_count,
+        "post_alerts_count": post_alerts_count,
+        "post_replays_count": post_replays_count,
+    }
+
 
 def reset_database():
     """

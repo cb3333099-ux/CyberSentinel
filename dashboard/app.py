@@ -31,6 +31,7 @@ from src.api.client import (
     get_severity_metrics,
     get_alerts,
     update_alert_status,
+    get_replays,
 )
 
 
@@ -440,6 +441,7 @@ with st.sidebar:
             "Detection Analytics",
             "Model Intelligence",
             "System Status",
+            "Replay / Dataset Telemetry",
         ],
         label_visibility="collapsed",
     )
@@ -500,8 +502,8 @@ with st.sidebar:
 
     limit_filter = st.selectbox(
         "Alert Limit",
-        [100, 500, 1000, 5000],
-        index=3,
+        [100, 500, 1000, 5000, 10000],
+        index=4,
         key="filter_limit",
     )
 
@@ -1165,6 +1167,67 @@ elif current_view == "System Status":
 </div>""",
             unsafe_allow_html=True,
         )
+
+
+# ============================================================
+# VIEW 7 — REPLAY / DATASET TELEMETRY
+# ============================================================
+
+elif current_view == "Replay / Dataset Telemetry":
+    st.markdown('<div style="font-size:12px; font-weight:700; color:#9ca3af; margin-bottom:10px;">HISTORICAL DATASET TELEMETRY & REPLAY SERVICE</div>', unsafe_allow_html=True)
+
+    r1, r2 = st.columns(2)
+
+    with r1:
+        st.markdown('<div class="soc-section-header">DATASET SCALE</div>', unsafe_allow_html=True)
+        st.markdown(
+            """<div class="detail-panel">
+<div class="detail-row"><span class="detail-key">Dataset Source</span><span class="detail-val">CSE-CIC-IDS2018</span></div>
+<div class="detail-row"><span class="detail-key">Total Test Flows</span><span class="detail-val">3,247,598 Flows</span></div>
+<div class="detail-row"><span class="detail-key">Benign Test Flows</span><span class="detail-val">2,697,619 (83.07%)</span></div>
+<div class="detail-row"><span class="detail-key">Attack Test Flows</span><span class="detail-val">549,979 (16.93%)</span></div>
+<div class="detail-row"><span class="detail-key">Attack Categories</span><span class="detail-val">14 Classes</span></div>
+</div>""",
+            unsafe_allow_html=True
+        )
+
+    with r2:
+        total_db_alerts = status_metrics.get("total", soc_metrics.get("total_alerts", 0))
+        st.markdown('<div class="soc-section-header">CURRENT SOC OPERATIONS</div>', unsafe_allow_html=True)
+        st.markdown(
+            f"""<div class="detail-panel">
+<div class="detail-row"><span class="detail-key">Supported Replay Capacity</span><span class="detail-val">50,000 Flows</span></div>
+<div class="detail-row"><span class="detail-key">Batch Size</span><span class="detail-val">1,000 Flows / Batch</span></div>
+<div class="detail-row"><span class="detail-key">Total Active SOC Alerts</span><span class="detail-val">{format_number(total_db_alerts)} Alerts</span></div>
+<div class="detail-row"><span class="detail-key">Replay Command</span><span class="detail-val" style="font-size:9px;">python -m src.streaming.replay_service --flows 50000 --batch-size 1000 --delay 0 --replay-id demo_50k</span></div>
+</div>""",
+            unsafe_allow_html=True
+        )
+
+    st.markdown('<div class="soc-section-header">HISTORICAL REPLAY RUN HISTORY</div>', unsafe_allow_html=True)
+    try:
+        replays = get_replays()
+        if replays:
+            df_rep = pd.DataFrame(replays)
+            st.dataframe(
+                df_rep[[
+                    "replay_id", "start_time", "flows_processed", "gt_attacks", "pred_attacks", "alerts_inserted", "throughput", "status"
+                ]].rename(columns={
+                    "replay_id": "REPLAY ID",
+                    "start_time": "START TIME",
+                    "flows_processed": "FLOWS PROCESSED",
+                    "gt_attacks": "GT ATTACKS",
+                    "pred_attacks": "PRED ATTACKS",
+                    "alerts_inserted": "ALERTS PERSISTED",
+                    "throughput": "THROUGHPUT (FLOWS/SEC)",
+                    "status": "STATUS"
+                }),
+                use_container_width=True, hide_index=True
+            )
+        else:
+            st.info("No recorded replay runs in SQLite replay_history yet.")
+    except Exception as exc:
+        st.warning(f"Could not load replay history: {exc}")
 
 
 # ============================================================

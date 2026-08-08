@@ -370,179 +370,119 @@ def print_summary(
     results: List[Dict[str, Any]],
     ground_truth: List[str],
     inserted_counts: List[int],
+    flows_requested: int = 50000,
+    processing_time: float = 0.0,
+    replay_id: str = "demo_50k",
+    start_time: str = "",
 ):
     """
-    Print overall streaming replay metrics.
+    Print overall streaming replay metrics and persist summary to replay_history.
     """
-
     total = len(results)
 
-    # --------------------------------------------------------
-    # Ground truth attack count
-    # --------------------------------------------------------
+    gt_attacks = sum(1 for value in ground_truth if value != "Benign")
+    gt_benign = total - gt_attacks
 
-    actual_attacks = sum(
-        1
-        for value in ground_truth
-        if value != "Benign"
-    )
+    pred_attacks = sum(1 for result in results if result.get("is_attack") is True)
+    pred_benign = total - pred_attacks
 
-    actual_benign = (
-        total
-        - actual_attacks
-    )
+    # Confusion matrix
+    tp = sum(1 for gt, r in zip(ground_truth, results) if gt != "Benign" and r.get("is_attack") is True)
+    tn = sum(1 for gt, r in zip(ground_truth, results) if gt == "Benign" and r.get("is_attack") is False)
+    fp = sum(1 for gt, r in zip(ground_truth, results) if gt == "Benign" and r.get("is_attack") is True)
+    fn = sum(1 for gt, r in zip(ground_truth, results) if gt != "Benign" and r.get("is_attack") is False)
 
-    # --------------------------------------------------------
-    # Predicted attack count
-    # --------------------------------------------------------
+    stage1_acc = (tp + tn) / total if total > 0 else 0.0
+    stage1_recall = tp / gt_attacks if gt_attacks > 0 else 0.0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    f1_score = (2 * precision * stage1_recall) / (precision + stage1_recall) if (precision + stage1_recall) > 0 else 0.0
 
-    predicted_attacks = sum(
-        1
-        for result in results
-        if result.get("is_attack") is True
-    )
+    # Stage 2 classification accuracy (on ground truth attacks)
+    attack_flows = [(gt, r) for gt, r in zip(ground_truth, results) if gt != "Benign"]
+    stage2_correct = sum(1 for gt, r in attack_flows if r.get("attack_type") == gt)
+    stage2_acc = stage2_correct / len(attack_flows) if attack_flows else 0.0
 
-    predicted_benign = (
-        total
-        - predicted_attacks
-    )
+    alerts_inserted = sum(inserted_counts)
 
-    # --------------------------------------------------------
-    # Stage 1 accuracy
-    # --------------------------------------------------------
+    severities = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    confidences = []
+    for r in results:
+        if r.get("is_attack"):
+            sev = str(r.get("severity", "UNKNOWN")).upper()
+            if sev in severities:
+                severities[sev] += 1
+            conf = float(r.get("confidence", 0.0))
+            confidences.append(conf)
 
-    stage1_correct = 0
+    avg_conf = (sum(confidences) / len(confidences)) * 100 if confidences else 0.0
+    throughput = (total / processing_time) if processing_time > 0 else 0.0
+    end_time = datetime.now().isoformat()
 
-    for truth, result in zip(
-        ground_truth,
-        results,
-    ):
-
-        actual_attack = (
-            truth != "Benign"
-        )
-
-        predicted_attack = (
-            result.get(
-                "is_attack",
-                False,
-            )
-        )
-
-        if (
-            actual_attack
-            == predicted_attack
-        ):
-            stage1_correct += 1
-
-    stage1_accuracy = (
-        stage1_correct / total
-        if total
-        else 0.0
-    )
-
-    # --------------------------------------------------------
-    # Stage 2 accuracy
-    #
-    # Only evaluate flows that are actually attacks.
-    # --------------------------------------------------------
-
-    attack_flows = [
-        (truth, result)
-        for truth, result in zip(
-            ground_truth,
-            results,
-        )
-        if truth != "Benign"
-    ]
-
-    stage2_correct = 0
-
-    for truth, result in attack_flows:
-
-        if (
-            result.get("attack_type")
-            == truth
-        ):
-            stage2_correct += 1
-
-    stage2_accuracy = (
-        stage2_correct
-        / len(attack_flows)
-        if attack_flows
-        else 0.0
-    )
-
-    # --------------------------------------------------------
-    # Persistence
-    # --------------------------------------------------------
-
-    alerts_inserted = sum(
-        inserted_counts
-    )
-
-    # --------------------------------------------------------
-    # Print summary
-    # --------------------------------------------------------
+    # Persist summary to SQLite replay_history
+    from src.soc.alert_store import record_replay_run
+    record_replay_run({
+        "replay_id": replay_id,
+        "start_time": start_time if start_time else end_time,
+        "end_time": end_time,
+        "flows_requested": flows_requested,
+        "flows_processed": total,
+        "gt_benign": gt_benign,
+        "gt_attacks": gt_attacks,
+        "pred_benign": pred_benign,
+        "pred_attacks": pred_attacks,
+        "alerts_inserted": alerts_inserted,
+        "throughput": throughput,
+        "status": "COMPLETED"
+    })
 
     print()
-    print("=" * 90)
-    print(
-        "CYBERSENTINEL STREAM SUMMARY"
-    )
-    print("=" * 90)
-
-    print(
-        f"Flows processed       : "
-        f"{total}"
-    )
-
-    print(
-        f"Actual attacks        : "
-        f"{actual_attacks}"
-    )
-
-    print(
-        f"Actual benign         : "
-        f"{actual_benign}"
-    )
-
-    print(
-        f"Predicted attacks     : "
-        f"{predicted_attacks}"
-    )
-
-    print(
-        f"Predicted benign      : "
-        f"{predicted_benign}"
-    )
-
-    print(
-        f"Alerts inserted       : "
-        f"{alerts_inserted}"
-    )
-
-    print(
-        f"Stage-1 accuracy      : "
-        f"{stage1_accuracy:.4f}"
-    )
-
-    if attack_flows:
-
-        print(
-            f"Stage-2 type accuracy : "
-            f"{stage2_accuracy:.4f}"
-        )
-
-    else:
-
-        print(
-            "Stage-2 type accuracy : N/A"
-        )
-
-    print(
-        "=" * 90
-    )
+    print("=" * 70)
+    print("CYBERSENTINEL HISTORICAL SOC REPLAY COMPLETED")
+    print("=" * 70)
+    print(f"Replay ID              : {replay_id}")
+    print(f"Dataset                : CSE-CIC-IDS2018")
+    print(f"Source                 : {DATASET_PATH}")
+    print()
+    print(f"Flows requested        : {flows_requested:,}")
+    print(f"Flows processed        : {total:,}")
+    print()
+    print("Ground Truth")
+    print("------------")
+    print(f"Ground Truth Benign    : {gt_benign:,}")
+    print(f"Ground Truth Attacks   : {gt_attacks:,}")
+    print()
+    print("Model Prediction")
+    print("----------------")
+    print(f"Predicted Benign       : {pred_benign:,}")
+    print(f"Predicted Attacks      : {pred_attacks:,}")
+    print()
+    print("Stage-1")
+    print("-------")
+    print(f"Stage-1 Accuracy       : {stage1_acc * 100:.2f}%")
+    print(f"Stage-1 Attack Recall  : {stage1_recall * 100:.2f}%")
+    print(f"Precision              : {precision * 100:.2f}%")
+    print(f"F1 Score               : {f1_score * 100:.2f}%")
+    print()
+    print("Stage-2")
+    print("-------")
+    print(f"Attacks Classified     : {len(attack_flows):,}")
+    print(f"Classification Accuracy: {stage2_acc * 100:.2f}%")
+    print()
+    print("SOC Alerts")
+    print("----------")
+    print(f"Alerts Inserted        : {alerts_inserted:,}")
+    print(f"Critical               : {severities['CRITICAL']:,}")
+    print(f"High                   : {severities['HIGH']:,}")
+    print(f"Medium                 : {severities['MEDIUM']:,}")
+    print(f"Low                    : {severities['LOW']:,}")
+    print()
+    print(f"Average Confidence     : {avg_conf:.2f}%")
+    print()
+    print("Performance")
+    print("-----------")
+    print(f"Total Processing Time  : {processing_time:.2f} sec")
+    print(f"Throughput             : {throughput:.1f} flows/sec")
+    print("=" * 70)
 
 
 # ============================================================
@@ -553,20 +493,31 @@ def run_replay(
     number_of_flows: int = DEFAULT_FLOWS,
     batch_size: int = DEFAULT_BATCH_SIZE,
     delay: float = DEFAULT_DELAY,
+    replay_id: Optional[str] = None,
+    force: bool = False,
 ):
     """
-    Replay real network flows through CyberSentinel
-    using batch inference.
-
-    Example:
-
-        python -m src.streaming.replay_service \
-            --flows 6 \
-            --batch-size 3 \
-            --delay 1
+    Replay real network flows through CyberSentinel using batch inference.
     """
+    if not replay_id:
+        replay_id = f"demo_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    # Check duplicate run safety
+    from src.soc.alert_store import get_replay_run
+    existing_run = get_replay_run(replay_id)
+    if existing_run is not None and not force:
+        print()
+        print("=" * 70)
+        print(f"WARNING: Replay ID '{replay_id}' has already been executed!")
+        print("Use --force to re-run or specify a new --replay-id.")
+        print("Replay execution skipped.")
+        print("=" * 70)
+        return
 
     print_banner()
+
+    start_time_iso = datetime.now().isoformat()
+    t_start_replay = time.perf_counter()
 
     spark = create_spark()
 
@@ -589,15 +540,11 @@ def run_replay(
 
         rows = replay_df.collect()
 
-        print(
-            f"Flows loaded   : "
-            f"{len(rows)}"
-        )
-
-        print(
-            f"Batch size     : "
-            f"{batch_size}"
-        )
+        b_cnt = number_of_flows // 2
+        a_cnt = number_of_flows - b_cnt
+        print(f"Flows loaded       : {len(rows):,}")
+        print(f"Sampling strategy  : BALANCED ({b_cnt:,} benign + {a_cnt:,} attacks)")
+        print(f"Batch size         : {batch_size:,}")
 
         # ----------------------------------------------------
         # Initialize CyberSentinel
@@ -836,10 +783,16 @@ def run_replay(
         # Finished
         # ----------------------------------------------------
 
+        t_elapsed = time.perf_counter() - t_start_replay
+
         print_summary(
             all_results,
             all_ground_truth,
             all_inserted_counts,
+            flows_requested=number_of_flows,
+            processing_time=t_elapsed,
+            replay_id=replay_id,
+            start_time=start_time_iso,
         )
 
         print()
@@ -925,7 +878,46 @@ def main():
         ),
     )
 
+    # --------------------------------------------------------
+    # Replay ID & Force flag
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--replay-id",
+        type=str,
+        default=None,
+        help="Unique identifier for this replay run (e.g. demo_50k)",
+    )
+
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force execution even if replay_id already exists",
+    )
+
+    parser.add_argument(
+        "--reset-soc",
+        action="store_true",
+        help="Safely backup database and reset operational alerts table while preserving replay history",
+    )
+
     args = parser.parse_args()
+
+    if args.reset_soc:
+        from src.soc.alert_store import backup_and_reset_soc_alerts
+        res = backup_and_reset_soc_alerts(confirm=True)
+        print()
+        print("=" * 70)
+        print("CYBERSENTINEL SOC ALERT DATABASE RESET COMPLETED")
+        print("=" * 70)
+        print(f"Pre-reset Operational Alerts  : {res['pre_total_alerts']:,}")
+        print(f"Operational Alerts after reset: {res['post_alerts_count']}")
+        print(f"Replay History Preserved      : YES ({res['post_replays_count']} historical runs)")
+        print(f"Database Backup Created       : {res['backup_path']}")
+        print("=" * 70)
+        print()
+        import sys
+        sys.exit(0)
 
     # --------------------------------------------------------
     # Validation
@@ -963,6 +955,8 @@ def main():
         number_of_flows=args.flows,
         batch_size=args.batch_size,
         delay=args.delay,
+        replay_id=args.replay_id,
+        force=args.force,
     )
 
 

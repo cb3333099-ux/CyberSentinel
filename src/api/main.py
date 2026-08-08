@@ -12,6 +12,8 @@ from src.soc.alert_store import (
     get_alerts,
     get_status_counts,
     update_status,
+    get_replay_history,
+    get_replay_run,
 )
 
 
@@ -21,7 +23,7 @@ from src.soc.alert_store import (
 
 APP_NAME = "CyberSentinel SOC API"
 APP_VERSION = "1.0.0"
-DEFAULT_ALERT_LIMIT = 5000
+DEFAULT_ALERT_LIMIT = 10000
 MAX_ALERT_LIMIT = 10000
 
 
@@ -502,3 +504,26 @@ def severity_metrics():
     return counts.to_dict(
         orient="records"
     )
+
+
+# ============================================================
+# REPLAY HISTORY ENDPOINTS
+# ============================================================
+
+@app.get("/api/replays")
+def list_replays():
+    df = get_replay_history()
+    if df.empty:
+        return {"count": 0, "replays": []}
+    return {
+        "count": len(df),
+        "replays": df.to_dict(orient="records")
+    }
+
+
+@app.get("/api/replays/{replay_id}")
+def get_replay_details(replay_id: str):
+    record = get_replay_run(replay_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Replay run '{replay_id}' not found")
+    return record
