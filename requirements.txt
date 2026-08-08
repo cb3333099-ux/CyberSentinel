@@ -4,3 +4,6 @@ pandas
 pyarrow
 streamlit
 plotly
+fastapi
+uvicorn
+requests

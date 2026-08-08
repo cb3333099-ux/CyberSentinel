@@ -1,24 +1,37 @@
+import sys
 from pathlib import Path
+
+# ============================================================
+# PROJECT PATH
+# ============================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ============================================================
+# IMPORTS
+# ============================================================
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-ALERT_PATH = Path(
-    "/home/charay/cybersentinel-data/"
-    "inference/cybersentinel_alerts"
+from src.api.client import (
+    get_health,
+    get_soc_metrics,
+    get_status_metrics,
+    get_attack_metrics,
+    get_severity_metrics,
+    get_alerts,
+    update_alert_status,
 )
 
-DETECTION_THRESHOLD = 0.70
-
 
 # ============================================================
-# PAGE CONFIGURATION
+# PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
@@ -30,786 +43,1092 @@ st.set_page_config(
 
 
 # ============================================================
-# CUSTOM STYLING
+# GLOBAL CSS
 # ============================================================
 
 st.markdown(
     """
-    <style>
+<style>
 
-    .main {
-        background-color: #0b1120;
-    }
+.stApp {
+    background-color: #0b0f14;
+    color: #e6edf3;
+}
 
-    .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 3rem;
-    }
+[data-testid="stSidebar"] {
+    background-color: #080c11;
+    border-right: 1px solid #202833;
+}
 
-    .metric-card {
-        background: #111827;
-        border: 1px solid #263244;
-        border-radius: 12px;
-        padding: 18px;
-        min-height: 115px;
-    }
+[data-testid="stSidebar"] * {
+    color: #d7e0e8;
+}
 
-    .metric-title {
-        color: #94a3b8;
-        font-size: 0.72rem;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-    }
+/* ------------------------------------------------------------
+   Header
+   ------------------------------------------------------------ */
 
-    .metric-value {
-        color: #f8fafc;
-        font-size: 1.85rem;
-        font-weight: 800;
-        margin-top: 8px;
-    }
+.soc-header {
+    background: linear-gradient(
+        135deg,
+        #111827 0%,
+        #0f172a 55%,
+        #0b1220 100%
+    );
 
-    .metric-subtitle {
-        color: #64748b;
-        font-size: 0.72rem;
-        margin-top: 4px;
-    }
+    border: 1px solid #263241;
+    border-radius: 12px;
 
-    .online {
-        color: #22c55e;
-        font-weight: 700;
-    }
+    padding: 22px 26px;
 
-    .section-box {
-        background: #111827;
-        border: 1px solid #263244;
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 15px;
-    }
+    margin-bottom: 22px;
+}
 
-    .threat-title {
-        color: #f8fafc;
-        font-size: 1.15rem;
-        font-weight: 700;
-    }
+.soc-title {
+    color: #f8fafc;
+    font-size: 30px;
+    font-weight: 800;
+    line-height: 1.2;
+}
 
-    .threat-label {
-        color: #64748b;
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        font-weight: 700;
-        margin-bottom: 4px;
-    }
+.soc-subtitle {
+    color: #94a3b8;
+    font-size: 14px;
+    margin-top: 6px;
+}
 
-    .threat-value {
-        color: #e2e8f0;
-        font-size: 0.95rem;
-        font-weight: 600;
-        margin-bottom: 14px;
-        line-height: 1.5;
-    }
+.live-status {
+    color: #4ade80;
+    font-size: 12px;
+    font-weight: 700;
+    margin-top: 10px;
+}
 
-    </style>
-    """,
+/* ------------------------------------------------------------
+   Section headings
+   ------------------------------------------------------------ */
+
+.section-heading {
+    color: #f1f5f9;
+    font-size: 20px;
+    font-weight: 700;
+
+    margin-top: 25px;
+    margin-bottom: 13px;
+}
+
+/* ------------------------------------------------------------
+   Native Streamlit metrics
+   ------------------------------------------------------------ */
+
+[data-testid="stMetric"] {
+    background-color: #111827;
+
+    border: 1px solid #263241;
+    border-radius: 10px;
+
+    padding: 15px 16px;
+
+    min-height: 92px;
+}
+
+[data-testid="stMetricLabel"] {
+    color: #94a3b8 !important;
+    font-size: 11px !important;
+}
+
+[data-testid="stMetricValue"] {
+    color: #f8fafc !important;
+    font-size: 25px !important;
+    font-weight: 750 !important;
+}
+
+[data-testid="stMetricDelta"] {
+    display: none !important;
+}
+
+/* ------------------------------------------------------------
+   Captions under metrics
+   ------------------------------------------------------------ */
+
+.metric-caption {
+    color: #64748b;
+    font-size: 11px;
+    margin-top: -8px;
+    margin-bottom: 4px;
+}
+
+/* ------------------------------------------------------------
+   Tables
+   ------------------------------------------------------------ */
+
+[data-testid="stDataFrame"] {
+    border: 1px solid #263241;
+    border-radius: 8px;
+}
+
+/* ------------------------------------------------------------
+   Buttons
+   ------------------------------------------------------------ */
+
+.stButton > button {
+    border: 1px solid #364152;
+    background-color: #111827;
+    color: #e2e8f0;
+    border-radius: 7px;
+}
+
+.stButton > button:hover {
+    border-color: #64748b;
+    color: #ffffff;
+}
+
+/* ------------------------------------------------------------
+   Footer
+   ------------------------------------------------------------ */
+
+.footer {
+    border-top: 1px solid #263241;
+
+    margin-top: 35px;
+    padding-top: 16px;
+
+    color: #64748b;
+
+    text-align: center;
+
+    font-size: 11px;
+}
+
+</style>
+""",
     unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# HEADER
+# HELPERS
 # ============================================================
 
-st.markdown("# 🛡️ CyberSentinel")
+def safe_float(value, default=0.0):
+    try:
 
-st.markdown(
-    "### AI-Powered Network Threat Intelligence & Detection"
-)
+        if value is None:
+            return default
 
-st.markdown(
-    '<span class="online">● SYSTEM ONLINE</span>'
-    " &nbsp;&nbsp;|&nbsp;&nbsp; "
-    "Two-Stage ML Detection Pipeline",
-    unsafe_allow_html=True,
-)
+        if pd.isna(value):
+            return default
 
-st.divider()
+        return float(value)
+
+    except Exception:
+        return default
 
 
-# ============================================================
-# LOAD ALERT DATA
-# ============================================================
+def format_number(value):
+    try:
+        return f"{int(value):,}"
+    except Exception:
+        return "0"
 
-@st.cache_data
-def load_alerts():
 
-    if not ALERT_PATH.exists():
-        return pd.DataFrame()
+def format_percentage(value):
+    """
+    Handles both:
+        0.9613 -> 96.13%
+        96.13  -> 96.13%
+    """
 
     try:
-        return pd.read_parquet(ALERT_PATH)
 
-    except Exception as exc:
-        st.error(
-            f"Unable to load alert data: {exc}"
-        )
+        value = float(value)
+
+        if value > 1:
+            return f"{value:.2f}%"
+
+        return f"{value * 100:.2f}%"
+
+    except Exception:
+
+        return "0.00%"
+
+
+def first_available(row, names, default=None):
+    """
+    Return the first available/non-null field
+    from a list of possible API/database field names.
+    """
+
+    for name in names:
+
+        if name not in row.index:
+            continue
+
+        value = row[name]
+
+        if value is None:
+            continue
+
+        try:
+
+            if pd.isna(value):
+                continue
+
+        except Exception:
+            pass
+
+        return value
+
+    return default
+
+
+def normalize_alerts(alerts):
+
+    if alerts is None:
         return pd.DataFrame()
 
+    if isinstance(alerts, pd.DataFrame):
 
-alerts = load_alerts()
+        df = alerts.copy()
+
+    else:
+
+        df = pd.DataFrame(alerts)
+
+    if df.empty:
+        return df
+
+    # --------------------------------------------------------
+    # Normalize possible API field names
+    # --------------------------------------------------------
+
+    rename_map = {
+
+        "Alert_ID": "alert_id",
+        "AlertId": "alert_id",
+        "ID": "alert_id",
+
+        "Timestamp": "timestamp",
+
+        "Dst_Port": "dst_port",
+        "Destination_Port": "dst_port",
+        "DestinationPort": "dst_port",
+
+        "Protocol": "protocol",
+
+        "AttackType": "attack_type",
+        "Attack_Type": "attack_type",
+
+        "Severity": "severity",
+
+        "Status": "status",
+
+        "Attack_Probability": "attack_probability",
+        "AttackProbability": "attack_probability",
+
+        "Model_Confidence": "model_confidence",
+        "ModelConfidence": "model_confidence",
+
+    }
+
+    for old_name, new_name in rename_map.items():
+
+        if (
+            old_name in df.columns
+            and new_name not in df.columns
+        ):
+
+            df = df.rename(
+                columns={
+                    old_name: new_name
+                }
+            )
+
+    # --------------------------------------------------------
+    # Ensure expected columns exist
+    # --------------------------------------------------------
+
+    defaults = {
+
+        "alert_id": None,
+        "timestamp": None,
+        "dst_port": None,
+        "protocol": None,
+
+        "attack_probability": None,
+        "model_confidence": None,
+
+        "attack_type": "Unknown",
+        "severity": "UNKNOWN",
+        "status": "NEW",
+
+    }
+
+    for column, default in defaults.items():
+
+        if column not in df.columns:
+            df[column] = default
+
+    # --------------------------------------------------------
+    # Use model_confidence if attack_probability is absent
+    # --------------------------------------------------------
+
+    df["attack_probability"] = pd.to_numeric(
+        df["attack_probability"],
+        errors="coerce",
+    )
+
+    df["model_confidence"] = pd.to_numeric(
+        df["model_confidence"],
+        errors="coerce",
+    )
+
+    df["attack_probability"] = (
+        df["attack_probability"]
+        .fillna(df["model_confidence"])
+    )
+
+    # --------------------------------------------------------
+    # Data types
+    # --------------------------------------------------------
+
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        errors="coerce",
+    )
+
+    df["dst_port"] = pd.to_numeric(
+        df["dst_port"],
+        errors="coerce",
+    )
+
+    df["protocol"] = pd.to_numeric(
+        df["protocol"],
+        errors="coerce",
+    )
+
+    df["attack_type"] = (
+        df["attack_type"]
+        .fillna("Unknown")
+        .astype(str)
+    )
+
+    df["severity"] = (
+        df["severity"]
+        .fillna("UNKNOWN")
+        .astype(str)
+        .str.upper()
+    )
+
+    df["status"] = (
+        df["status"]
+        .fillna("NEW")
+        .astype(str)
+        .str.upper()
+    )
+
+    return df
+
+
+def protocol_name(value):
+
+    if value is None:
+        return "Unknown"
+
+    try:
+
+        if pd.isna(value):
+            return "Unknown"
+
+    except Exception:
+        pass
+
+    try:
+
+        number = int(float(value))
+
+        protocol_map = {
+            6: "TCP",
+            17: "UDP",
+            1: "ICMP",
+        }
+
+        return protocol_map.get(
+            number,
+            str(number),
+        )
+
+    except Exception:
+
+        text = str(value).strip()
+
+        if not text:
+            return "Unknown"
+
+        return text
+
+
+def port_value(value):
+
+    if value is None:
+        return "Unknown"
+
+    try:
+
+        if pd.isna(value):
+            return "Unknown"
+
+    except Exception:
+        pass
+
+    try:
+
+        return str(int(float(value)))
+
+    except Exception:
+
+        text = str(value).strip()
+
+        if not text:
+            return "Unknown"
+
+        return text
 
 
 # ============================================================
-# EMPTY DATA CHECK
+# API HEALTH
 # ============================================================
 
-if alerts.empty:
+try:
 
-    st.warning(
-        "No CyberSentinel alert data found."
+    health = get_health()
+
+    api_online = (
+        health.get("status")
+        == "healthy"
+    )
+
+except Exception as exc:
+
+    st.error(
+        f"CyberSentinel API is unavailable: {exc}"
+    )
+
+    st.info(
+        "Start the API in another terminal:"
     )
 
     st.code(
-        "python src/ml/inference.py",
-        language="bash",
+        "uvicorn src.api.main:app "
+        "--host 0.0.0.0 --port 8000"
     )
 
     st.stop()
 
 
 # ============================================================
-# DATA PREPARATION
+# HEADER
 # ============================================================
 
-alerts["Timestamp"] = pd.to_datetime(
-    alerts["Timestamp"],
-    errors="coerce",
-)
+# Keep the HTML compact so Streamlit does not interpret
+# individual blocks as Markdown code.
 
-alerts["attack_probability"] = pd.to_numeric(
-    alerts["attack_probability"],
-    errors="coerce",
-)
-
-alerts["Dst_Port"] = pd.to_numeric(
-    alerts["Dst_Port"],
-    errors="coerce",
-)
-
-alerts["Protocol"] = pd.to_numeric(
-    alerts["Protocol"],
-    errors="coerce",
-)
-
-alerts["severity"] = (
-    alerts["severity"]
-    .fillna("UNKNOWN")
-    .astype(str)
-)
-
-alerts["attack_type"] = (
-    alerts["attack_type"]
-    .fillna("Unknown")
-    .astype(str)
+st.markdown(
+    """
+<div class="soc-header"><div class="soc-title">🛡️ CyberSentinel</div><div class="soc-subtitle">AI-Powered Network Threat Intelligence &amp; Detection</div><div class="live-status">● SOC API ONLINE &nbsp;|&nbsp; Two-Stage ML Detection Pipeline</div></div>
+""",
+    unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# PROTOCOL MAPPING
+# SIDEBAR
 # ============================================================
 
-PROTOCOL_MAP = {
-    1: "ICMP",
-    6: "TCP",
-    17: "UDP",
-}
+with st.sidebar:
 
-
-# ============================================================
-# SIDEBAR FILTERS
-# ============================================================
-
-st.sidebar.title(
-    "Threat Operations"
-)
-
-st.sidebar.caption(
-    "Configure the active threat-intelligence view."
-)
-
-
-severity_options = sorted(
-    alerts["severity"].unique()
-)
-
-selected_severity = st.sidebar.multiselect(
-    "Severity",
-    severity_options,
-    default=severity_options,
-)
-
-
-attack_options = sorted(
-    alerts["attack_type"].unique()
-)
-
-selected_attacks = st.sidebar.multiselect(
-    "Attack Type",
-    attack_options,
-    default=attack_options,
-)
-
-
-min_probability = st.sidebar.slider(
-    "Minimum Model Confidence",
-    0.0,
-    1.0,
-    0.70,
-    0.05,
-)
-
-
-filtered = alerts[
-    alerts["severity"].isin(
-        selected_severity
-    )
-    &
-    alerts["attack_type"].isin(
-        selected_attacks
-    )
-    &
-    (
-        alerts["attack_probability"]
-        >= min_probability
-    )
-].copy()
-
-
-# ============================================================
-# CORE METRICS
-# ============================================================
-
-total_alerts = len(filtered)
-
-critical_count = int(
-    (filtered["severity"] == "CRITICAL").sum()
-)
-
-high_count = int(
-    (filtered["severity"] == "HIGH").sum()
-)
-
-attack_type_count = int(
-    filtered["attack_type"].nunique()
-)
-
-avg_confidence = (
-    float(
-        filtered["attack_probability"].mean()
-    )
-    if not filtered.empty
-    else 0.0
-)
-
-
-# ============================================================
-# OPERATIONAL RISK INDEX
-# ============================================================
-
-if total_alerts > 0:
-
-    critical_ratio = (
-        critical_count / total_alerts
+    st.title(
+        "🛡️ CyberSentinel"
     )
 
-    high_ratio = (
-        high_count / total_alerts
+    st.caption(
+        "Security Operations Center"
     )
 
-    medium_ratio = (
-        1
-        - critical_ratio
-        - high_ratio
+    st.divider()
+
+    st.subheader(
+        "Alert Filters"
     )
 
-    risk_index = (
-        critical_ratio * 100
-        + high_ratio * 65
-        + max(medium_ratio, 0) * 35
+    status_filter = st.selectbox(
+        "Status",
+        [
+            "ALL",
+            "NEW",
+            "INVESTIGATING",
+            "ESCALATED",
+            "RESOLVED",
+        ],
     )
 
-    risk_index = min(
-        100,
-        max(0, risk_index),
+    severity_filter = st.selectbox(
+        "Severity",
+        [
+            "ALL",
+            "CRITICAL",
+            "HIGH",
+            "MEDIUM",
+            "LOW",
+        ],
     )
 
-else:
+    attack_filter = st.selectbox(
+        "Attack Type",
+        [
+            "ALL",
+            "Brute Force -Web",
+            "Brute Force -XSS",
+            "SQL Injection",
+        ],
+    )
 
-    risk_index = 0
+    st.divider()
+
+    st.subheader(
+        "System"
+    )
+
+    st.caption(
+        "Detection threshold: 0.70"
+    )
+
+    st.caption(
+        "Stage 1: Attack Detection"
+    )
+
+    st.caption(
+        "Stage 2: Attack Classification"
+    )
+
+    st.caption(
+        "Backend: FastAPI + SQLite"
+    )
+
+    st.caption(
+        "Analytics: PySpark"
+    )
+
+    st.divider()
+
+    if st.button(
+        "🔄 Refresh Dashboard",
+        use_container_width=True,
+    ):
+
+        st.cache_data.clear()
+
+        st.rerun()
 
 
 # ============================================================
-# TOP THREAT
+# LOAD SOC METRICS
 # ============================================================
 
-if not filtered.empty:
+try:
 
-    attack_counts_raw = (
-        filtered["attack_type"]
-        .value_counts()
+    soc_metrics = get_soc_metrics()
+
+    status_metrics = get_status_metrics()
+
+    attack_metrics = get_attack_metrics()
+
+    severity_metrics = get_severity_metrics()
+
+except Exception as exc:
+
+    st.error(
+        f"Failed to load SOC metrics: {exc}"
     )
 
-    top_attack = attack_counts_raw.idxmax()
-
-    top_attack_count = int(
-        attack_counts_raw.max()
-    )
-
-else:
-
-    top_attack = "None"
-    top_attack_count = 0
-
-
-# ============================================================
-# TOP TARGETED PORT
-# ============================================================
-
-if not filtered.empty:
-
-    port_counts_raw = (
-        filtered["Dst_Port"]
-        .value_counts()
-    )
-
-    top_port = int(
-        port_counts_raw.idxmax()
-    )
-
-    top_port_count = int(
-        port_counts_raw.max()
-    )
-
-else:
-
-    top_port = "-"
-    top_port_count = 0
+    st.stop()
 
 
 # ============================================================
-# KPI ROW
+# STATUS COUNTS
 # ============================================================
+
+status_counts = status_metrics.get(
+    "by_status",
+    {},
+)
+
+total_alerts = status_metrics.get(
+    "total",
+    soc_metrics.get(
+        "total_alerts",
+        0,
+    ),
+)
+
+new_alerts = status_counts.get(
+    "NEW",
+    0,
+)
+
+investigating = status_counts.get(
+    "INVESTIGATING",
+    0,
+)
+
+escalated = status_counts.get(
+    "ESCALATED",
+    0,
+)
+
+resolved = status_counts.get(
+    "RESOLVED",
+    0,
+)
+
+
+# ============================================================
+# SOC OVERVIEW
+# ============================================================
+
+st.markdown(
+    '<div class="section-heading">SOC Overview</div>',
+    unsafe_allow_html=True,
+)
 
 c1, c2, c3, c4, c5 = st.columns(5)
 
 
 with c1:
 
+    st.metric(
+        "Active Alerts",
+        format_number(
+            total_alerts
+        ),
+    )
+
     st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-title">
-                Active Alerts
-            </div>
-            <div class="metric-value">
-                {total_alerts:,}
-            </div>
-            <div class="metric-subtitle">
-                Current filtered feed
-            </div>
-        </div>
-        """,
+        '<div class="metric-caption">'
+        'Total alerts in SOC'
+        '</div>',
         unsafe_allow_html=True,
     )
 
 
 with c2:
 
+    st.metric(
+        "Critical Alerts",
+        format_number(
+            soc_metrics.get(
+                "critical_alerts",
+                0,
+            )
+        ),
+    )
+
     st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-title">
-                Operational Risk
-            </div>
-            <div class="metric-value">
-                {risk_index:.0f}/100
-            </div>
-            <div class="metric-subtitle">
-                Severity-weighted index
-            </div>
-        </div>
-        """,
+        '<div class="metric-caption">'
+        'Immediate attention required'
+        '</div>',
         unsafe_allow_html=True,
     )
 
 
 with c3:
 
+    st.metric(
+        "Investigating",
+        format_number(
+            investigating
+        ),
+    )
+
     st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-title">
-                Critical Alerts
-            </div>
-            <div class="metric-value">
-                {critical_count:,}
-            </div>
-            <div class="metric-subtitle">
-                Immediate investigation
-            </div>
-        </div>
-        """,
+        '<div class="metric-caption">'
+        'Analyst investigation'
+        '</div>',
         unsafe_allow_html=True,
     )
 
 
 with c4:
 
+    st.metric(
+        "Escalated",
+        format_number(
+            escalated
+        ),
+    )
+
     st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-title">
-                Top Threat
-            </div>
-            <div class="metric-value"
-                 style="font-size:1.15rem;">
-                {top_attack}
-            </div>
-            <div class="metric-subtitle">
-                {top_attack_count:,} detected alerts
-            </div>
-        </div>
-        """,
+        '<div class="metric-caption">'
+        'Requires escalation'
+        '</div>',
         unsafe_allow_html=True,
     )
 
 
 with c5:
 
+    st.metric(
+        "Average Confidence",
+        format_percentage(
+            soc_metrics.get(
+                "average_confidence",
+                0,
+            )
+        ),
+    )
+
     st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-title">
-                Avg Model Confidence
-            </div>
-            <div class="metric-value">
-                {avg_confidence:.1%}
-            </div>
-            <div class="metric-subtitle">
-                Stage 1 detection score
-            </div>
-        </div>
-        """,
+        '<div class="metric-caption">'
+        'Model confidence'
+        '</div>',
         unsafe_allow_html=True,
     )
 
 
-st.markdown("")
-
-
 # ============================================================
-# THREAT OPERATIONS
+# ALERT WORKFLOW
 # ============================================================
 
-st.subheader(
-    "Threat Operations"
+st.markdown(
+    '<div class="section-heading">Alert Workflow</div>',
+    unsafe_allow_html=True,
 )
 
-left, right = st.columns(2)
+w1, w2, w3, w4 = st.columns(4)
+
+
+with w1:
+
+    st.metric(
+        "🆕 NEW",
+        format_number(
+            new_alerts
+        ),
+    )
+
+    st.markdown(
+        '<div class="metric-caption">'
+        'Current alerts awaiting investigation'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+with w2:
+
+    st.metric(
+        "🔎 INVESTIGATING",
+        format_number(
+            investigating
+        ),
+    )
+
+    st.markdown(
+        '<div class="metric-caption">'
+        'Alerts under analyst investigation'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+with w3:
+
+    st.metric(
+        "⚠️ ESCALATED",
+        format_number(
+            escalated
+        ),
+    )
+
+    st.markdown(
+        '<div class="metric-caption">'
+        'Alerts requiring escalation'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+with w4:
+
+    st.metric(
+        "✅ RESOLVED",
+        format_number(
+            resolved
+        ),
+    )
+
+    st.markdown(
+        '<div class="metric-caption">'
+        'Resolved security alerts'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# THREAT INTELLIGENCE
+# ============================================================
+
+st.markdown(
+    '<div class="section-heading">Threat Intelligence</div>',
+    unsafe_allow_html=True,
+)
+
+left_chart, right_chart = st.columns(2)
 
 
 # ============================================================
 # ATTACK DISTRIBUTION
 # ============================================================
 
-with left:
+with left_chart:
 
-    st.markdown(
-        "#### Attack Distribution"
+    attack_df = pd.DataFrame(
+        attack_metrics
     )
 
-    attack_counts = (
-        filtered["attack_type"]
-        .value_counts()
-        .reset_index()
-    )
+    if not attack_df.empty:
 
-    attack_counts.columns = [
-        "Attack Type",
-        "Alerts",
-    ]
+        if (
+            "attack_type"
+            not in attack_df.columns
+        ):
 
-    fig_attack = px.bar(
-        attack_counts,
-        x="Attack Type",
-        y="Alerts",
-        text="Alerts",
-    )
+            for candidate in [
+                "AttackType",
+                "Attack_Type",
+            ]:
 
-    fig_attack.update_layout(
-        template="plotly_dark",
-        height=390,
-        margin=dict(
-            l=20,
-            r=20,
-            t=20,
-            b=20,
-        ),
-        xaxis_title=None,
-    )
+                if candidate in attack_df.columns:
 
-    fig_attack.update_traces(
-        textposition="outside"
-    )
+                    attack_df = attack_df.rename(
+                        columns={
+                            candidate:
+                                "attack_type"
+                        }
+                    )
 
-    st.plotly_chart(
-        fig_attack,
-        use_container_width=True,
-    )
+                    break
+
+        fig = px.bar(
+            attack_df,
+            x="attack_type",
+            y="count",
+            title="Alerts by Attack Type",
+        )
+
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#11161d",
+            plot_bgcolor="#11161d",
+            margin=dict(
+                l=30,
+                r=20,
+                t=55,
+                b=30,
+            ),
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No attack distribution data."
+        )
 
 
 # ============================================================
 # SEVERITY DISTRIBUTION
 # ============================================================
 
-with right:
+with right_chart:
 
-    st.markdown(
-        "#### Severity Distribution"
+    severity_df = pd.DataFrame(
+        severity_metrics
     )
 
-    severity_counts = (
-        filtered["severity"]
-        .value_counts()
-        .reset_index()
-    )
+    if not severity_df.empty:
 
-    severity_counts.columns = [
-        "Severity",
-        "Alerts",
-    ]
+        if (
+            "severity"
+            not in severity_df.columns
+        ):
 
-    fig_severity = px.pie(
-        severity_counts,
-        names="Severity",
-        values="Alerts",
-        hole=0.58,
-    )
+            if "Severity" in severity_df.columns:
 
-    fig_severity.update_layout(
-        template="plotly_dark",
-        height=390,
-        margin=dict(
-            l=20,
-            r=20,
-            t=20,
-            b=20,
-        ),
-    )
+                severity_df = severity_df.rename(
+                    columns={
+                        "Severity":
+                            "severity"
+                    }
+                )
 
-    st.plotly_chart(
-        fig_severity,
-        use_container_width=True,
-    )
+        fig = px.pie(
+            severity_df,
+            names="severity",
+            values="count",
+            hole=0.55,
+            title="Alerts by Severity",
+        )
+
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#11161d",
+            plot_bgcolor="#11161d",
+            margin=dict(
+                l=20,
+                r=20,
+                t=55,
+                b=20,
+            ),
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+
+    else:
+
+        st.info(
+            "No severity distribution data."
+        )
 
 
 # ============================================================
-# THREAT TIMELINE
+# FILTER PARAMETERS
 # ============================================================
 
-st.subheader(
-    "Threat Activity Timeline"
+status_parameter = (
+    None
+    if status_filter == "ALL"
+    else status_filter
 )
 
-if not filtered.empty:
+severity_parameter = (
+    None
+    if severity_filter == "ALL"
+    else severity_filter
+)
 
-    timeline = (
-        filtered
-        .dropna(subset=["Timestamp"])
-        .assign(
-            Hour=lambda x:
-                x["Timestamp"].dt.floor("h")
-        )
-        .groupby(
-            ["Hour", "severity"]
-        )
-        .size()
-        .reset_index(
-            name="Alerts"
-        )
-    )
-
-    fig_timeline = px.line(
-        timeline,
-        x="Hour",
-        y="Alerts",
-        color="severity",
-        markers=True,
-    )
-
-    fig_timeline.update_layout(
-        template="plotly_dark",
-        height=400,
-        margin=dict(
-            l=20,
-            r=20,
-            t=20,
-            b=20,
-        ),
-        xaxis_title="Time",
-        yaxis_title="Alerts",
-    )
-
-    st.plotly_chart(
-        fig_timeline,
-        use_container_width=True,
-    )
+attack_parameter = (
+    None
+    if attack_filter == "ALL"
+    else attack_filter
+)
 
 
 # ============================================================
-# TARGETED PORTS + PROTOCOLS
+# LOAD ALERTS
 # ============================================================
 
-left, right = st.columns(2)
+try:
 
-
-with left:
-
-    st.markdown(
-        "#### Most Targeted Ports"
+    raw_alerts = get_alerts(
+        status=status_parameter,
+        severity=severity_parameter,
+        attack_type=attack_parameter,
+        limit=1000,
     )
 
-    port_counts = (
-        filtered["Dst_Port"]
-        .value_counts()
-        .head(10)
-        .reset_index()
+    alerts_df = normalize_alerts(
+        raw_alerts
     )
 
-    port_counts.columns = [
-        "Destination Port",
-        "Alerts",
-    ]
+except Exception as exc:
 
-    port_counts[
-        "Destination Port"
-    ] = (
-        port_counts[
-            "Destination Port"
-        ]
-        .astype(int)
-        .astype(str)
+    st.error(
+        f"Failed to load alerts: {exc}"
     )
 
-    fig_ports = px.bar(
-        port_counts,
-        x="Alerts",
-        y="Destination Port",
-        orientation="h",
-        text="Alerts",
-    )
-
-    fig_ports.update_layout(
-        template="plotly_dark",
-        height=400,
-        margin=dict(
-            l=20,
-            r=20,
-            t=20,
-            b=20,
-        ),
-        yaxis=dict(
-            categoryorder="total ascending"
-        ),
-    )
-
-    st.plotly_chart(
-        fig_ports,
-        use_container_width=True,
-    )
-
-
-with right:
-
-    st.markdown(
-        "#### Protocol Distribution"
-    )
-
-    protocol_data = filtered.copy()
-
-    protocol_data["Protocol Name"] = (
-        protocol_data["Protocol"]
-        .map(PROTOCOL_MAP)
-        .fillna("Other")
-    )
-
-    protocol_counts = (
-        protocol_data[
-            "Protocol Name"
-        ]
-        .value_counts()
-        .reset_index()
-    )
-
-    protocol_counts.columns = [
-        "Protocol",
-        "Alerts",
-    ]
-
-    fig_protocol = px.pie(
-        protocol_counts,
-        names="Protocol",
-        values="Alerts",
-        hole=0.55,
-    )
-
-    fig_protocol.update_layout(
-        template="plotly_dark",
-        height=400,
-        margin=dict(
-            l=20,
-            r=20,
-            t=20,
-            b=20,
-        ),
-    )
-
-    st.plotly_chart(
-        fig_protocol,
-        use_container_width=True,
-    )
+    alerts_df = pd.DataFrame()
 
 
 # ============================================================
 # ALERT INVESTIGATION
 # ============================================================
 
-st.subheader(
-    "Alert Investigation"
+st.markdown(
+    '<div class="section-heading">Alert Investigation</div>',
+    unsafe_allow_html=True,
 )
 
-if filtered.empty:
+st.caption(
+    "Select an alert to investigate its threat "
+    "characteristics and update its SOC workflow state."
+)
+
+
+if alerts_df.empty:
 
     st.info(
-        "No alerts match the current filters."
+        "No alerts match the selected filters."
     )
 
 else:
 
-    investigation_df = (
-        filtered
-        .sort_values(
-            "attack_probability",
-            ascending=False,
-        )
-        .reset_index(drop=True)
+    # --------------------------------------------------------
+    # Sort alerts
+    # --------------------------------------------------------
+
+    severity_rank = {
+        "CRITICAL": 0,
+        "HIGH": 1,
+        "MEDIUM": 2,
+        "LOW": 3,
+        "UNKNOWN": 4,
+    }
+
+    alerts_df["_severity_rank"] = (
+        alerts_df["severity"]
+        .map(severity_rank)
+        .fillna(99)
     )
 
-    investigation_labels = []
+    alerts_df = alerts_df.sort_values(
+        [
+            "_severity_rank",
+            "attack_probability",
+        ],
+        ascending=[
+            True,
+            False,
+        ],
+    )
 
-    for i, row in investigation_df.head(100).iterrows():
+    alerts_df = alerts_df.drop(
+        columns=[
+            "_severity_rank"
+        ]
+    )
 
-        timestamp = row["Timestamp"]
+    # --------------------------------------------------------
+    # Alert selector
+    # --------------------------------------------------------
+
+    options = []
+
+    option_indices = []
+
+    for index, row in alerts_df.iterrows():
+
+        timestamp = row.get(
+            "timestamp"
+        )
 
         if pd.notna(timestamp):
 
@@ -821,394 +1140,589 @@ else:
 
             timestamp_text = "Unknown"
 
-        investigation_labels.append(
-            f"{i} | "
-            f"{timestamp_text} | "
-            f"{row['attack_type']} | "
-            f"{row['severity']} | "
-            f"{row['attack_probability']:.2%}"
+        probability = safe_float(
+            row.get(
+                "attack_probability"
+            )
         )
 
-    selected_label = st.selectbox(
-        "Select an alert to investigate",
-        investigation_labels,
+        options.append(
+            f"{row.get('alert_id', index)}"
+            f" — {timestamp_text}"
+            f" — {row.get('attack_type', 'Unknown')}"
+            f" — {row.get('severity', 'UNKNOWN')}"
+            f" — {format_percentage(probability)}"
+            f" — {row.get('status', 'NEW')}"
+        )
+
+        option_indices.append(
+            index
+        )
+
+    selected_position = st.selectbox(
+        "Select an alert",
+        range(len(options)),
+        format_func=lambda x:
+            options[x],
     )
 
-    selected_index = int(
-        selected_label.split("|")[0].strip()
-    )
+    selected_index = option_indices[
+        selected_position
+    ]
 
-    selected = investigation_df.iloc[
+    selected = alerts_df.loc[
         selected_index
     ]
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # SELECTED THREAT
-    # --------------------------------------------------------
+    # ========================================================
 
     st.markdown(
-        """
-        <div class="section-box">
-            <div class="threat-title">
-                Selected Threat
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+        "### Selected Threat"
     )
-
 
     d1, d2, d3, d4 = st.columns(4)
 
 
+    attack_type = str(
+        first_available(
+            selected,
+            [
+                "attack_type",
+                "AttackType",
+                "Attack_Type",
+            ],
+            "Unknown",
+        )
+    )
+
+
+    severity = str(
+        first_available(
+            selected,
+            [
+                "severity",
+                "Severity",
+            ],
+            "UNKNOWN",
+        )
+    )
+
+
+    confidence_value = first_available(
+        selected,
+        [
+            "attack_probability",
+            "model_confidence",
+            "confidence",
+            "probability",
+        ],
+        0,
+    )
+
+    confidence = safe_float(
+        confidence_value
+    )
+
+
+    status = str(
+        first_available(
+            selected,
+            [
+                "status",
+                "Status",
+            ],
+            "NEW",
+        )
+    )
+
+
     with d1:
 
-        st.markdown(
-            '<div class="threat-label">'
-            'Attack Type'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            f'<div class="threat-value">'
-            f'{selected["attack_type"]}'
-            f'</div>',
-            unsafe_allow_html=True,
+        st.metric(
+            "Attack Type",
+            attack_type,
         )
 
 
     with d2:
 
-        st.markdown(
-            '<div class="threat-label">'
-            'Severity'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            f'<div class="threat-value">'
-            f'{selected["severity"]}'
-            f'</div>',
-            unsafe_allow_html=True,
+        st.metric(
+            "Severity",
+            severity,
         )
 
 
     with d3:
 
-        st.markdown(
-            '<div class="threat-label">'
-            'Model Confidence'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            f'<div class="threat-value">'
-            f'{selected["attack_probability"]:.2%}'
-            f'</div>',
-            unsafe_allow_html=True,
+        st.metric(
+            "Model Confidence",
+            format_percentage(
+                confidence
+            ),
         )
 
 
     with d4:
 
-        st.markdown(
-            '<div class="threat-label">'
-            'Destination Port'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            f'<div class="threat-value">'
-            f'{int(selected["Dst_Port"])}'
-            f'</div>',
-            unsafe_allow_html=True,
+        st.metric(
+            "Status",
+            status,
         )
 
 
-    e1, e2, e3, e4 = st.columns(4)
+    # ========================================================
+    # NETWORK DETAILS
+    # ========================================================
+
+    network_col, assessment_col = st.columns(2)
 
 
-    with e1:
+    with network_col:
 
         st.markdown(
-            '<div class="threat-label">'
-            'Timestamp'
-            '</div>',
-            unsafe_allow_html=True,
+            "#### Network Details"
         )
 
-        st.write(
-            selected["Timestamp"]
+        timestamp = first_available(
+            selected,
+            [
+                "timestamp",
+                "Timestamp",
+            ],
+            None,
         )
 
+        if timestamp is not None:
 
-    with e2:
+            try:
 
-        st.markdown(
-            '<div class="threat-label">'
-            'Protocol'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+                timestamp = pd.to_datetime(
+                    timestamp
+                ).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
 
-        protocol = PROTOCOL_MAP.get(
-            int(selected["Protocol"]),
-            "Other",
-        )
+            except Exception:
 
-        st.write(protocol)
-
-
-    with e3:
-
-        st.markdown(
-            '<div class="threat-label">'
-            'Flow Duration'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        flow_duration = selected.get(
-            "Flow_Duration",
-            0,
-        )
-
-        st.write(
-            f"{float(flow_duration):,.0f}"
-        )
-
-
-    with e4:
-
-        st.markdown(
-            '<div class="threat-label">'
-            'Alert Source'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.write(
-            "CyberSentinel ML Detector"
-        )
-
-
-# ============================================================
-# THREAT ASSESSMENT & RESPONSE
-# ============================================================
-
-st.subheader(
-    "Threat Assessment & Response"
-)
-
-if not filtered.empty:
-
-    response_left, response_right = st.columns(
-        [1.4, 1]
-    )
-
-
-    # --------------------------------------------------------
-    # AUTOMATED THREAT ASSESSMENT
-    # --------------------------------------------------------
-
-    with response_left:
-
-        st.markdown(
-            """
-            <div class="section-box">
-                <div class="threat-title">
-                    Automated Threat Assessment
-                </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        selected_attack = selected["attack_type"]
-        selected_port = int(selected["Dst_Port"])
-        selected_severity = selected["severity"]
-        selected_probability = float(
-            selected["attack_probability"]
-        )
-
-
-        if selected_attack == "Brute Force -Web":
-
-            assessment = (
-                "Repeated web-service activity is "
-                "consistent with a brute-force attack "
-                "pattern targeting an HTTP service."
-            )
-
-            recommendation = (
-                "Investigate the originating traffic, "
-                "review authentication activity, and "
-                "consider rate limiting or access controls."
-            )
-
-
-        elif selected_attack == "Brute Force -XSS":
-
-            assessment = (
-                "Traffic exhibits characteristics "
-                "associated with cross-site scripting "
-                "activity combined with brute-force behavior."
-            )
-
-            recommendation = (
-                "Inspect HTTP request patterns and "
-                "review application-layer security controls."
-            )
-
-
-        elif selected_attack == "SQL Injection":
-
-            assessment = (
-                "The detected traffic is classified as "
-                "SQL injection activity targeting an "
-                "application service."
-            )
-
-            recommendation = (
-                "Inspect application logs and database "
-                "requests and validate input sanitization."
-            )
-
+                timestamp = str(
+                    timestamp
+                )
 
         else:
 
-            assessment = (
-                "The model identified suspicious network "
-                "activity requiring analyst investigation."
-            )
+            timestamp = "Unknown"
 
-            recommendation = (
-                "Review the associated network flow and "
-                "host activity."
-            )
 
+        destination_port = first_available(
+            selected,
+            [
+                "dst_port",
+                "Dst_Port",
+                "destination_port",
+                "Destination_Port",
+            ],
+            None,
+        )
+
+
+        protocol = first_available(
+            selected,
+            [
+                "protocol",
+                "Protocol",
+            ],
+            None,
+        )
+
+
+        st.json(
+            {
+                "Timestamp":
+                    timestamp,
+
+                "Destination Port":
+                    port_value(
+                        destination_port
+                    ),
+
+                "Protocol":
+                    protocol_name(
+                        protocol
+                    ),
+            }
+        )
+
+
+    # ========================================================
+    # THREAT ASSESSMENT
+    # ========================================================
+
+    with assessment_col:
 
         st.markdown(
-            '<div class="threat-label">'
-            'Attack Pattern'
-            '</div>',
-            unsafe_allow_html=True,
+            "#### Threat Assessment"
         )
 
-        st.markdown(
-            f'<div class="threat-value">'
-            f'{assessment}'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        st.json(
+            {
+                "Attack Type":
+                    attack_type,
 
+                "Severity":
+                    severity,
 
-        st.markdown(
-            '<div class="threat-label">'
-            'Recommended Action'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+                "Model Confidence":
+                    format_percentage(
+                        confidence
+                    ),
 
-        st.markdown(
-            f'<div class="threat-value">'
-            f'{recommendation}'
-            f'</div>',
-            unsafe_allow_html=True,
+                "Current Status":
+                    status,
+            }
         )
 
 
-        st.markdown(
-            '</div>',
-            unsafe_allow_html=True,
-        )
+    # ========================================================
+    # SOC ACTIONS
+    # ========================================================
+
+    st.markdown(
+        "### SOC Actions"
+    )
+
+    a1, a2, a3, a4 = st.columns(4)
 
 
-    # --------------------------------------------------------
-    # RESPONSE STATUS
-    # --------------------------------------------------------
-
-    with response_right:
-
-        st.markdown(
-            """
-            <div class="section-box">
-                <div class="threat-title">
-                    Response Status
-                </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        st.write(
-            f"**Severity:** {selected_severity}"
-        )
-
-        st.write(
-            f"**Confidence:** "
-            f"{selected_probability:.2%}"
-        )
-
-        st.write(
-            f"**Destination:** "
-            f"Port {selected_port}"
-        )
-
-        st.write(
-            "**Detection Pipeline:** "
-            "Stage 1 → Stage 2"
-        )
-
-        st.markdown(
-            "</div>",
-            unsafe_allow_html=True,
-        )
+    alert_id = first_available(
+        selected,
+        [
+            "alert_id",
+            "Alert_ID",
+            "id",
+        ],
+        None,
+    )
 
 
-        action_col1, action_col2 = st.columns(2)
+    with a1:
 
+        if st.button(
+            "🔎 Investigate",
+            use_container_width=True,
+        ):
 
-        with action_col1:
+            try:
 
-            if st.button(
-                "✓ Mark Investigated",
-                use_container_width=True,
-            ):
+                update_alert_status(
+                    alert_id,
+                    "INVESTIGATING",
+                )
 
                 st.success(
-                    "Alert marked as investigated."
+                    "Alert moved to INVESTIGATING."
+                )
+
+                st.cache_data.clear()
+
+                st.rerun()
+
+            except Exception as exc:
+
+                st.error(
+                    f"Investigation failed: {exc}"
                 )
 
 
-        with action_col2:
+    with a2:
 
-            if st.button(
-                "⚠ Escalate",
-                use_container_width=True,
-            ):
+        if st.button(
+            "⚠️ Escalate",
+            use_container_width=True,
+        ):
+
+            try:
+
+                update_alert_status(
+                    alert_id,
+                    "ESCALATED",
+                )
 
                 st.warning(
-                    "Alert escalated for further review."
+                    "Alert escalated."
                 )
 
+                st.cache_data.clear()
+
+                st.rerun()
+
+            except Exception as exc:
+
+                st.error(
+                    f"Escalation failed: {exc}"
+                )
+
+
+    with a3:
+
+        if st.button(
+            "✅ Resolve",
+            use_container_width=True,
+        ):
+
+            try:
+
+                update_alert_status(
+                    alert_id,
+                    "RESOLVED",
+                )
+
+                st.success(
+                    "Alert resolved."
+                )
+
+                st.cache_data.clear()
+
+                st.rerun()
+
+            except Exception as exc:
+
+                st.error(
+                    f"Resolution failed: {exc}"
+                )
+
+
+    with a4:
+
+        if st.button(
+            "↩️ Reset to NEW",
+            use_container_width=True,
+        ):
+
+            try:
+
+                update_alert_status(
+                    alert_id,
+                    "NEW",
+                )
+
+                st.info(
+                    "Alert reset to NEW."
+                )
+
+                st.cache_data.clear()
+
+                st.rerun()
+
+            except Exception as exc:
+
+                st.error(
+                    f"Reset failed: {exc}"
+                )
+
+
+# ============================================================
+# SOC ALERT QUEUE
+# ============================================================
+
+st.markdown(
+    '<div class="section-heading">SOC Alert Queue</div>',
+    unsafe_allow_html=True,
+)
+
+
+if alerts_df.empty:
+
+    st.info(
+        "No alerts available."
+    )
 
 else:
 
-    st.info(
-        "Select an alert to activate threat assessment."
+    queue_df = alerts_df.copy()
+
+    queue_df = queue_df.head(100)
+
+    queue_columns = [
+        "alert_id",
+        "timestamp",
+        "attack_type",
+        "severity",
+        "attack_probability",
+        "dst_port",
+        "protocol",
+        "status",
+    ]
+
+    queue_columns = [
+        column
+        for column in queue_columns
+        if column in queue_df.columns
+    ]
+
+    queue_df = queue_df[
+        queue_columns
+    ]
+
+    queue_df = queue_df.rename(
+        columns={
+            "alert_id":
+                "Alert ID",
+
+            "timestamp":
+                "Timestamp",
+
+            "attack_type":
+                "Attack Type",
+
+            "severity":
+                "Severity",
+
+            "attack_probability":
+                "Confidence",
+
+            "dst_port":
+                "Dst Port",
+
+            "protocol":
+                "Protocol",
+
+            "status":
+                "Status",
+        }
     )
+
+
+    if "Timestamp" in queue_df.columns:
+
+        queue_df["Timestamp"] = (
+            pd.to_datetime(
+                queue_df["Timestamp"],
+                errors="coerce",
+            )
+            .dt.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        )
+
+
+    if "Confidence" in queue_df.columns:
+
+        queue_df["Confidence"] = (
+            queue_df["Confidence"]
+            .apply(
+                lambda value:
+                    format_percentage(
+                        safe_float(
+                            value
+                        )
+                    )
+            )
+        )
+
+
+    if "Dst Port" in queue_df.columns:
+
+        queue_df["Dst Port"] = (
+            queue_df["Dst Port"]
+            .apply(
+                port_value
+            )
+        )
+
+
+    if "Protocol" in queue_df.columns:
+
+        queue_df["Protocol"] = (
+            queue_df["Protocol"]
+            .apply(
+                protocol_name
+            )
+        )
+
+
+    st.dataframe(
+        queue_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+# ============================================================
+# THREAT INTELLIGENCE SUMMARY
+# ============================================================
+
+st.markdown(
+    '<div class="section-heading">'
+    'Threat Intelligence Summary'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+summary_left, summary_right = st.columns(2)
+
+
+with summary_left:
+
+    st.markdown(
+        "### Attack Distribution"
+    )
+
+    attack_summary = pd.DataFrame(
+        attack_metrics
+    )
+
+    if not attack_summary.empty:
+
+        st.dataframe(
+            attack_summary,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    else:
+
+        st.info(
+            "No attack distribution available."
+        )
+
+
+with summary_right:
+
+    st.markdown(
+        "### Severity Distribution"
+    )
+
+    severity_summary = pd.DataFrame(
+        severity_metrics
+    )
+
+    if not severity_summary.empty:
+
+        st.dataframe(
+            severity_summary,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    else:
+
+        st.info(
+            "No severity distribution available."
+        )
 
 
 # ============================================================
 # MODEL INTELLIGENCE
 # ============================================================
 
-st.subheader(
-    "Model Intelligence"
+st.markdown(
+    '<div class="section-heading">'
+    'Model Intelligence'
+    '</div>',
+    unsafe_allow_html=True,
 )
 
 m1, m2, m3, m4 = st.columns(4)
@@ -1217,20 +1731,12 @@ m1, m2, m3, m4 = st.columns(4)
 with m1:
 
     st.metric(
-        "Detection Model",
-        "Random Forest",
+        "Detection Threshold",
+        "0.70",
     )
 
 
 with m2:
-
-    st.metric(
-        "Detection Threshold",
-        f"{DETECTION_THRESHOLD:.2f}",
-    )
-
-
-with m3:
 
     st.metric(
         "ML Features",
@@ -1238,88 +1744,38 @@ with m3:
     )
 
 
-with m4:
+with m3:
 
     st.metric(
         "Attack Classes",
-        "3",
+        format_number(
+            soc_metrics.get(
+                "attack_types",
+                3,
+            )
+        ),
+    )
+
+
+with m4:
+
+    st.metric(
+        "Average Confidence",
+        format_percentage(
+            soc_metrics.get(
+                "average_confidence",
+                0,
+            )
+        ),
     )
 
 
 st.caption(
     "CyberSentinel uses a two-stage machine-learning "
-    "pipeline: Stage 1 detects suspicious network flows "
-    "and Stage 2 classifies detected attacks as "
-    "Brute Force -Web, Brute Force -XSS, or SQL Injection."
-)
-
-
-# ============================================================
-# THREAT ALERT FEED
-# ============================================================
-
-st.subheader(
-    "Threat Alert Feed"
-)
-
-display_columns = [
-    "Timestamp",
-    "Dst_Port",
-    "Protocol",
-    "attack_probability",
-    "attack_type",
-    "severity",
-]
-
-table = filtered[
-    display_columns
-].copy()
-
-
-# Convert protocol numbers into readable names.
-
-table["Protocol"] = (
-    table["Protocol"]
-    .map(PROTOCOL_MAP)
-    .fillna("Other")
-)
-
-
-# Format probability.
-
-table["attack_probability"] = (
-    table["attack_probability"]
-    .map(
-        lambda x:
-        f"{x:.2%}"
-    )
-)
-
-
-# Format destination port.
-
-table["Dst_Port"] = (
-    table["Dst_Port"]
-    .apply(
-        lambda x:
-        int(x)
-        if pd.notna(x)
-        else "-"
-    )
-)
-
-
-table = table.sort_values(
-    "Timestamp",
-    ascending=False,
-)
-
-
-st.dataframe(
-    table,
-    use_container_width=True,
-    height=450,
-    hide_index=True,
+    "architecture. Stage 1 detects suspicious network "
+    "flows, while Stage 2 classifies detected attacks "
+    "into Brute Force -Web, Brute Force -XSS, and "
+    "SQL Injection."
 )
 
 
@@ -1327,9 +1783,9 @@ st.dataframe(
 # FOOTER
 # ============================================================
 
-st.divider()
-
-st.caption(
-    "CyberSentinel • AI-powered network threat "
-    "detection and intelligence platform"
+st.markdown(
+    """
+<div class="footer">CyberSentinel • AI-Powered Network Threat Detection &nbsp;|&nbsp; PySpark • Random Forest • FastAPI • SQLite • Streamlit</div>
+""",
+    unsafe_allow_html=True,
 )
