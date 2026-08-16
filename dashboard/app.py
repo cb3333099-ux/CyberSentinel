@@ -32,7 +32,42 @@ from src.api.client import (
     get_alerts,
     update_alert_status,
     get_replays,
+    get_stream_status,
+    start_stream,
+    stop_stream,
+    pause_stream,
+    resume_stream,
+    get_network_interfaces,
+    get_network_status,
+    start_network_pcap,
+    start_network_live,
+    stop_network_stream,
+    get_network_flows,
+    get_incidents,
+    get_incident,
+    update_incident_status,
+    assign_incident,
+    get_incident_alerts,
+    get_incident_timeline,
+    get_indicators,
+    add_indicator,
+    remove_indicator,
+    get_rules,
+    get_mitre_techniques,
+    get_mitre_tactics,
+    get_incident_intelligence,
+    get_analytics_summary,
+    get_analytics_trends,
+    get_analytics_attacks,
+    get_analytics_severity,
+    get_analytics_entities,
+    get_analytics_protocols,
+    get_analytics_incidents,
+    get_analytics_model,
+    get_analytics_dataset,
 )
+
+
 
 
 # ============================================================
@@ -332,6 +367,7 @@ def normalize_alerts(alerts):
         "Timestamp": "timestamp",
         "Dst_Port": "dst_port",
         "Destination_Port": "dst_port",
+        "destination_port": "dst_port",
         "DestinationPort": "dst_port",
         "Protocol": "protocol",
         "AttackType": "attack_type",
@@ -342,7 +378,9 @@ def normalize_alerts(alerts):
         "AttackProbability": "attack_probability",
         "Model_Confidence": "model_confidence",
         "ModelConfidence": "model_confidence",
+        "confidence": "attack_probability",
     }
+
 
     for old_name, new_name in rename_map.items():
         if old_name in df.columns and new_name not in df.columns:
@@ -369,10 +407,10 @@ def normalize_alerts(alerts):
     df["attack_probability"] = df["attack_probability"].fillna(df["model_confidence"])
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
     df["dst_port"] = pd.to_numeric(df["dst_port"], errors="coerce")
-    df["protocol"] = pd.to_numeric(df["protocol"], errors="coerce")
     df["attack_type"] = df["attack_type"].fillna("Unknown").astype(str)
     df["severity"] = df["severity"].fillna("UNKNOWN").astype(str).str.upper()
     df["status"] = df["status"].fillna("NEW").astype(str).str.upper()
+
 
     return df
 
@@ -380,12 +418,15 @@ def normalize_alerts(alerts):
 def protocol_name(value):
     if value is None or pd.isna(value):
         return "Unknown"
+    txt = str(value).strip()
+    if txt in ["TCP", "UDP", "ICMP"]:
+        return txt
     try:
         num = int(float(value))
         return {6: "TCP", 17: "UDP", 1: "ICMP"}.get(num, str(num))
     except Exception:
-        txt = str(value).strip()
         return txt if txt else "Unknown"
+
 
 
 def port_value(value):
@@ -436,8 +477,10 @@ with st.sidebar:
         "Navigation",
         [
             "Overview",
+            "Real-Time Monitoring",
             "Incidents",
             "Threat Intelligence",
+            "SOC Analytics",
             "Detection Analytics",
             "Model Intelligence",
             "System Status",
@@ -445,6 +488,7 @@ with st.sidebar:
         ],
         label_visibility="collapsed",
     )
+
 
     st.divider()
 
@@ -540,7 +584,7 @@ st.markdown(
     <div class="soc-subtitle-main">Incident Monitoring & Threat Detection Console</div>
 </div>
 <div>
-    <span class="status-dot-green">● LIVE</span> &nbsp;|&nbsp; 
+    <span class="status-dot-green">● LIVE</span> &nbsp;|&nbsp;
     <span style="font-size:10px; color:#9ca3af;">{time.strftime('%Y-%m-%d %H:%M:%S UTC')}</span>
 </div>
 </div>""",
@@ -593,10 +637,376 @@ avg_confidence = soc_metrics.get("average_confidence", 0)
 
 
 # ============================================================
+# VIEW — REAL-TIME MONITORING
+# ============================================================
+
+if current_view == "Real-Time Monitoring":
+    st.markdown('<div style="font-size:12px; font-weight:700; color:#9ca3af; margin-bottom:10px;">REAL-TIME NETWORK THREAT STREAMING MONITOR</div>', unsafe_allow_html=True)
+
+    # Determine active input source early to fetch correct telemetry endpoint
+    active_input_source = st.session_state.get("input_source_selector", "SIMULATED")
+
+    if active_input_source in ["LIVE NETWORK", "PCAP"]:
+        try:
+            stream_telemetry = get_network_status()
+        except Exception:
+            stream_telemetry = {"status": "STOPPED", "throughput": 0.0, "packets_captured": 0, "flows_analyzed": 0, "attacks_detected": 0, "alerts_generated": 0}
+    else:
+        try:
+            stream_telemetry = get_stream_status()
+        except Exception:
+            stream_telemetry = {"status": "STOPPED", "throughput": 0.0, "flows_processed": 0, "attacks_detected": 0, "alerts_generated": 0}
+
+    s_status = str(stream_telemetry.get("status", "STOPPED")).upper()
+
+    if s_status in ["RUNNING", "STARTING"]:
+        status_badge = '<span style="color:#10b981; font-weight:700;">● LIVE / RUNNING</span>'
+    elif s_status == "PAUSED":
+        status_badge = '<span style="color:#f59e0b; font-weight:700;">● PAUSED</span>'
+    elif s_status == "ERROR":
+        status_badge = f'<span style="color:#ef4444; font-weight:700;">● ERROR ({stream_telemetry.get("capture_permission", "DENIED")})</span>'
+    else:
+        status_badge = '<span style="color:#ef4444; font-weight:700;">● STOPPED</span>'
+
+    # Header Panel
+    st.markdown(
+        f"""<div class="detail-panel" style="display:flex; justify-content:space-between; align-items:center;">
+<div>
+    <span style="font-size:12px; font-weight:700; color:#f3f4f6;">STREAM STATUS: {status_badge}</span>
+    <div style="font-size:10px; color:#9ca3af;">Mode: {active_input_source} | Engine: CyberSentinel Stream & Network Monitor</div>
+</div>
+<div style="font-size:11px; color:#e5e7eb; text-align:right;">
+    Throughput: <strong>{stream_telemetry.get('throughput', 0.0):.1f} flows/sec</strong>
+</div>
+</div>""",
+        unsafe_allow_html=True,
+    )
+
+    # Input Source Selector
+    st.markdown('<div class="soc-section-header">INPUT TRAFFIC SOURCE</div>', unsafe_allow_html=True)
+    input_source = st.radio(
+        "Select Traffic Source Mode",
+        ["SIMULATED", "PCAP", "LIVE NETWORK"],
+        horizontal=True,
+        key="input_source_selector",
+    )
+
+    if input_source == "PCAP":
+        st.markdown('<div class="soc-section-header">PCAP FILE ANALYSIS CONFIGURATION</div>', unsafe_allow_html=True)
+        pc1, pc2, pc3 = st.columns([3, 2, 2])
+        with pc1:
+            cfg_pcap_path = st.text_input("PCAP File Path", value="data/test_sample.pcap")
+        with pc2:
+            cfg_pcap_batch = st.number_input("Batch Size", min_value=1, max_value=500, value=20, step=10, key="pcap_batch")
+        with pc3:
+            cfg_pcap_timeout = st.number_input("Flow Timeout (sec)", min_value=1.0, max_value=60.0, value=10.0, step=1.0, key="pcap_timeout")
+
+        p_btn1, p_btn2 = st.columns(2)
+        with p_btn1:
+            if st.button("START PCAP ANALYSIS", use_container_width=True):
+                try:
+                    res = start_network_pcap(
+                        pcap_path=cfg_pcap_path,
+                        batch_size=cfg_pcap_batch,
+                        flow_timeout=cfg_pcap_timeout,
+                    )
+                    st.success(res.get("message", "PCAP analysis started"))
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to start PCAP analysis: {exc}")
+        with p_btn2:
+            if st.button("STOP PCAP ANALYSIS", use_container_width=True):
+                try:
+                    stop_network_stream()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to stop stream: {exc}")
+
+    elif input_source == "LIVE NETWORK":
+        st.markdown('<div class="soc-section-header">LIVE NETWORK INTERFACE MONITORING</div>', unsafe_allow_html=True)
+        try:
+            ifaces = get_network_interfaces()
+            iface_names = [ifc["name"] for ifc in ifaces] if isinstance(ifaces, list) else ["eth0", "wlan0", "lo"]
+        except Exception:
+            iface_names = ["eth0", "wlan0", "lo"]
+
+        lc1, lc2, lc3 = st.columns([3, 2, 2])
+        with lc1:
+            cfg_iface = st.selectbox("Select Network Interface", iface_names)
+        with lc2:
+            cfg_live_batch = st.number_input("Batch Size", min_value=1, max_value=500, value=20, step=10, key="live_batch")
+        with lc3:
+            cfg_live_timeout = st.number_input("Flow Timeout (sec)", min_value=1.0, max_value=60.0, value=10.0, step=1.0, key="live_timeout")
+
+        st.warning(f"⚠️ Passive Monitoring Mode: Passively analyzes network flows visible to local interface '{cfg_iface}'. No packet modification or injection.")
+
+        l_btn1, l_btn2 = st.columns(2)
+        with l_btn1:
+            if st.button("START LIVE MONITORING", use_container_width=True):
+                try:
+                    res = start_network_live(
+                        interface=cfg_iface,
+                        batch_size=cfg_live_batch,
+                        flow_timeout=cfg_live_timeout,
+                    )
+                    st.success(res.get("message", "Live monitoring started"))
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to start live monitoring: {exc}")
+        with l_btn2:
+            if st.button("STOP LIVE MONITORING", use_container_width=True):
+                try:
+                    stop_network_stream()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to stop live monitoring: {exc}")
+
+    else:
+        # Controls Panel (SIMULATED)
+        st.markdown('<div class="soc-section-header">STREAM CONTROLS & CONFIGURATION (SIMULATED)</div>', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
+        with c1:
+            cfg_batch = st.number_input("Batch Size", min_value=1, max_value=500, value=50, step=10)
+        with c2:
+            cfg_delay = st.number_input("Delay (sec)", min_value=0.0, max_value=10.0, value=0.5, step=0.1)
+        with c3:
+            cfg_flows = st.number_input("Max Flows (0=All)", min_value=0, max_value=500000, value=200, step=50)
+        with c4:
+            cfg_seed = st.number_input("Seed", min_value=0, max_value=99999, value=42, step=1)
+
+        ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
+        with ctrl_col1:
+            if st.button("START STREAM", use_container_width=True, disabled=(s_status in ["RUNNING", "PAUSED"])):
+                try:
+                    res = start_stream(
+                        batch_size=cfg_batch,
+                        delay=cfg_delay,
+                        flows=cfg_flows if cfg_flows > 0 else None,
+                        continuous=False,
+                        seed=cfg_seed,
+                    )
+                    st.success(res.get("message", "Stream started"))
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to start stream: {exc}")
+
+        with ctrl_col2:
+            if st.button("PAUSE STREAM", use_container_width=True, disabled=(s_status != "RUNNING")):
+                try:
+                    pause_stream()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to pause stream: {exc}")
+
+        with ctrl_col3:
+            if st.button("RESUME STREAM", use_container_width=True, disabled=(s_status != "PAUSED")):
+                try:
+                    resume_stream()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to resume stream: {exc}")
+
+        with ctrl_col4:
+            if st.button("STOP STREAM", use_container_width=True, disabled=(s_status == "STOPPED")):
+                try:
+                    stop_stream()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Failed to stop stream: {exc}")
+
+    # Display Telemetry Metrics according to selected input source mode
+    if input_source == "LIVE NETWORK":
+        # LIVE NETWORK TELEMETRY PANEL
+        st.markdown('<div class="soc-section-header">LIVE NETWORK TELEMETRY</div>', unsafe_allow_html=True)
+        l1, l2, l3, l4 = st.columns(4)
+        with l1:
+            st.metric("PACKETS CAPTURED", format_number(stream_telemetry.get("packets_captured", 0)))
+        with l2:
+            st.metric("ACTIVE FLOWS", format_number(stream_telemetry.get("active_flows", 0)))
+        with l3:
+            st.metric("COMPLETED FLOWS", format_number(stream_telemetry.get("flows_completed", 0)))
+        with l4:
+            st.metric("FLOWS ANALYZED", format_number(stream_telemetry.get("flows_analyzed", 0)))
+
+        l5, l6, l7, l8 = st.columns(4)
+        with l5:
+            st.metric("BENIGN DETECTED", format_number(stream_telemetry.get("benign_detected", 0)))
+        with l6:
+            st.metric("ATTACKS DETECTED", format_number(stream_telemetry.get("attacks_detected", 0)))
+        with l7:
+            st.metric("ALERTS GENERATED", format_number(stream_telemetry.get("alerts_generated", 0)))
+        with l8:
+            avg_conf_val = stream_telemetry.get("average_confidence", 0.0)
+            conf_str = f"{avg_conf_val:.1f}%" if avg_conf_val > 1.0 else format_percentage(avg_conf_val)
+            st.metric("AVERAGE CONFIDENCE", conf_str)
+
+        l9, l10, l11 = st.columns(3)
+        with l9:
+            st.metric("THROUGHPUT", f"{stream_telemetry.get('throughput', 0.0):.1f} flows/s")
+        with l10:
+            st.metric("CAPTURE PERMISSION", str(stream_telemetry.get("capture_permission", "UNKNOWN")))
+        with l11:
+            st.metric("STREAM UPTIME", f"{stream_telemetry.get('stream_uptime', 0.0):.1f}s")
+
+        st.markdown('<div class="soc-section-header">LIVE ALERT BREAKDOWN</div>', unsafe_allow_html=True)
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            st.metric("CRITICAL ALERTS", format_number(stream_telemetry.get("critical_alerts", 0)))
+        with s2:
+            st.metric("HIGH ALERTS", format_number(stream_telemetry.get("high_alerts", 0)))
+        with s3:
+            st.metric("MEDIUM ALERTS", format_number(stream_telemetry.get("medium_alerts", 0)))
+        with s4:
+            st.metric("LOW ALERTS", format_number(stream_telemetry.get("low_alerts", 0)))
+
+    elif input_source == "PCAP" and not ("ground_truth_benign" in stream_telemetry and (stream_telemetry.get("ground_truth_benign", 0) > 0 or stream_telemetry.get("ground_truth_attacks", 0) > 0)):
+        # PCAP FLOW TELEMETRY PANEL (without ground truth labels)
+        st.markdown('<div class="soc-section-header">PCAP FLOW TELEMETRY</div>', unsafe_allow_html=True)
+        p1, p2, p3, p4 = st.columns(4)
+        with p1:
+            st.metric("PACKETS CAPTURED", format_number(stream_telemetry.get("packets_captured", 0)))
+        with p2:
+            st.metric("FLOWS CREATED", format_number(stream_telemetry.get("flows_created", 0)))
+        with p3:
+            st.metric("FLOWS COMPLETED", format_number(stream_telemetry.get("flows_completed", 0)))
+        with p4:
+            st.metric("FLOWS ANALYZED", format_number(stream_telemetry.get("flows_analyzed", 0)))
+
+        p5, p6, p7, p8 = st.columns(4)
+        with p5:
+            st.metric("BENIGN DETECTED", format_number(stream_telemetry.get("benign_detected", 0)))
+        with p6:
+            st.metric("ATTACKS DETECTED", format_number(stream_telemetry.get("attacks_detected", 0)))
+        with p7:
+            st.metric("ALERTS GENERATED", format_number(stream_telemetry.get("alerts_generated", 0)))
+        with p8:
+            avg_conf_val = stream_telemetry.get("average_confidence", 0.0)
+            conf_str = f"{avg_conf_val:.1f}%" if avg_conf_val > 1.0 else format_percentage(avg_conf_val)
+            st.metric("AVERAGE CONFIDENCE", conf_str)
+
+        st.markdown('<div class="soc-section-header">PCAP ALERT BREAKDOWN</div>', unsafe_allow_html=True)
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            st.metric("CRITICAL ALERTS", format_number(stream_telemetry.get("critical_alerts", 0)))
+        with s2:
+            st.metric("HIGH ALERTS", format_number(stream_telemetry.get("high_alerts", 0)))
+        with s3:
+            st.metric("MEDIUM ALERTS", format_number(stream_telemetry.get("medium_alerts", 0)))
+        with s4:
+            st.metric("LOW ALERTS", format_number(stream_telemetry.get("low_alerts", 0)))
+
+    else:
+        # SIMULATED MODE (OR LABELED PCAP): GROUND TRUTH VS MODEL PREDICTION METRICS
+        st.markdown('<div class="soc-section-header">GROUND TRUTH VS MODEL PREDICTION METRICS</div>', unsafe_allow_html=True)
+        g1, g2, g3, g4 = st.columns(4)
+        gt_benign = stream_telemetry.get("ground_truth_benign", 0)
+        gt_attacks = stream_telemetry.get("ground_truth_attacks", 0)
+        gt_rate = stream_telemetry.get("ground_truth_attack_rate", 0.0)
+
+        pred_attacks = stream_telemetry.get("predicted_attacks", stream_telemetry.get("attacks_detected", 0))
+        pred_benign = stream_telemetry.get("predicted_benign", stream_telemetry.get("benign_detected", 0))
+        pred_rate = stream_telemetry.get("predicted_attack_rate", 0.0)
+
+        with g1:
+            st.metric("GT BENIGN FLOWS", format_number(gt_benign))
+        with g2:
+            st.metric("GT ATTACK FLOWS", format_number(gt_attacks))
+        with g3:
+            st.metric("GROUND TRUTH ATTACK RATE", f"{gt_rate:.1f}%")
+        with g4:
+            st.metric("MODEL DETECTED ATTACK RATE", f"{pred_rate:.1f}%")
+
+        # SOC Results Panel
+        st.markdown('<div class="soc-section-header">SOC ALERTS METRICS</div>', unsafe_allow_html=True)
+        m1, m2, m3, m4, m5 = st.columns(5)
+        processed_val = stream_telemetry.get("flows_processed", 0)
+        alerts_val = stream_telemetry.get("alerts_generated", 0)
+        throughput_val = stream_telemetry.get("throughput", 0.0)
+        avg_conf_val = stream_telemetry.get("average_confidence", 0.0)
+
+        with m1:
+            st.metric("FLOWS PROCESSED", format_number(processed_val))
+        with m2:
+            st.metric("PREDICTED ATTACKS", format_number(pred_attacks))
+        with m3:
+            st.metric("ALERTS PERSISTED", format_number(alerts_val))
+        with m4:
+            st.metric("AVG CONFIDENCE", format_percentage(avg_conf_val))
+        with m5:
+            st.metric("THROUGHPUT", f"{throughput_val:.1f} flows/s")
+
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            st.metric("CRITICAL ALERTS", format_number(stream_telemetry.get("critical_alerts", 0)))
+        with s2:
+            st.metric("HIGH ALERTS", format_number(stream_telemetry.get("high_alerts", 0)))
+        with s3:
+            st.metric("MEDIUM ALERTS", format_number(stream_telemetry.get("medium_alerts", 0)))
+        with s4:
+            st.metric("LOW ALERTS", format_number(stream_telemetry.get("low_alerts", 0)))
+
+    # Recent Completed Network Flow Activity Table
+    st.markdown('<div class="soc-section-header">NETWORK FLOW ACTIVITY (RECENT COMPLETED FLOWS)</div>', unsafe_allow_html=True)
+    try:
+        net_flows = get_network_flows()
+        if net_flows and isinstance(net_flows, list):
+            net_df = pd.DataFrame(net_flows)
+            net_table = net_df.rename(columns={
+                "time": "TIME",
+                "src_ip": "SOURCE",
+                "dst_ip": "DESTINATION",
+                "dst_port": "DST PORT",
+                "protocol": "PROTOCOL",
+                "packets": "PACKETS",
+                "bytes": "BYTES",
+                "status": "STATUS",
+            })
+            st.dataframe(net_table[["TIME", "SOURCE", "DESTINATION", "DST PORT", "PROTOCOL", "PACKETS", "BYTES", "STATUS"]], use_container_width=True, hide_index=True, height=250)
+        else:
+            st.info("No active network flows completed yet.")
+    except Exception:
+        st.info("Network flow activity available during PCAP / Live Network ingestion mode.")
+
+
+    # Live Threat Feed Table
+    st.markdown('<div class="soc-section-header">LIVE THREAT FEED (NEWEST DETECTED ATTACKS)</div>', unsafe_allow_html=True)
+
+    if not alerts_df.empty:
+        feed_df = alerts_df.head(20).copy()
+        feed_df["Time"] = feed_df["timestamp"].dt.strftime("%H:%M:%S").fillna("Unknown")
+        feed_df["Confidence"] = feed_df["attack_probability"].apply(lambda v: format_percentage(safe_float(v)))
+        feed_df["Dst Port"] = feed_df["dst_port"].apply(port_value)
+        feed_df["Protocol"] = feed_df["protocol"].apply(protocol_name)
+        feed_df["SEVERITY"] = feed_df["severity"].apply(lambda s: f"● {s}")
+
+        feed_table = feed_df[[
+            "SEVERITY", "Time", "attack_type", "Confidence", "Dst Port", "Protocol", "status", "alert_id"
+        ]].rename(columns={
+            "Time": "TIME",
+            "attack_type": "ATTACK TYPE",
+            "Confidence": "CONFIDENCE",
+            "Dst Port": "DST PORT",
+            "Protocol": "PROTOCOL",
+            "status": "STATUS",
+            "alert_id": "ALERT ID"
+        })
+
+        st.dataframe(feed_table, use_container_width=True, hide_index=True, height=350)
+
+    else:
+        st.info("No attack alerts currently generated.")
+
+    if s_status == "RUNNING":
+        time.sleep(2)
+        st.rerun()
+
+
+# ============================================================
 # VIEW 1 — SOC OVERVIEW
 # ============================================================
 
-if current_view == "Overview":
+elif current_view == "Overview":
+
     # Operational Summary Metrics Row
     m1, m2, m3, m4, m5 = st.columns(5)
     with m1:
@@ -746,256 +1156,566 @@ if current_view == "Overview":
 # ============================================================
 
 elif current_view == "Incidents":
-    st.markdown('<div style="font-size:12px; font-weight:700; color:#9ca3af; margin-bottom:10px;">INCIDENT QUEUE — Security alerts requiring analyst review</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:12px; font-weight:700; color:#9ca3af; margin-bottom:10px;">INCIDENT ANALYST WORKSPACE — Phase 3A Correlation & Response Engine</div>', unsafe_allow_html=True)
 
-    left_col, right_col = st.columns([65, 35])
+    left_col, right_col = st.columns([52, 48])
+
+    # Fetch incidents from API
+    try:
+        incidents_list = get_incidents(
+            status=None if status_filter == "ALL" else status_filter,
+            severity=None if severity_filter == "ALL" else severity_filter,
+            limit=limit_filter,
+        )
+    except Exception as exc:
+        incidents_list = []
+        st.error(f"Failed to fetch incidents: {exc}")
 
     with left_col:
         st.markdown('<div class="soc-section-header">INCIDENT QUEUE</div>', unsafe_allow_html=True)
 
-        if alerts_df.empty:
-            st.info("No incidents match current filters.")
-            selected_row = None
+        if not incidents_list:
+            st.info("No correlated incidents match the current filters.")
+            selected_inc = None
         else:
-            severity_rank = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNKNOWN": 4}
-            alerts_df["_severity_rank"] = alerts_df["severity"].map(severity_rank).fillna(99)
-            alerts_df = alerts_df.sort_values(["_severity_rank", "attack_probability"], ascending=[True, False])
-            alerts_df = alerts_df.drop(columns=["_severity_rank"])
+            inc_df = pd.DataFrame(incidents_list)
 
-            display_queue = alerts_df.copy().head(100)
-            display_queue["TIMESTAMP"] = display_queue["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S").fillna("Unknown")
-            display_queue["CONFIDENCE"] = display_queue["attack_probability"].apply(lambda v: format_percentage(safe_float(v)))
-            display_queue["DST PORT"] = display_queue["dst_port"].apply(port_value)
-            display_queue["PROTOCOL"] = display_queue["protocol"].apply(protocol_name)
-            display_queue["SEVERITY"] = display_queue["severity"].apply(lambda s: f"● {s}")
+            queue_display = inc_df.copy()
+            queue_display["RISK"] = queue_display["risk_score"].apply(lambda s: f"⚡ {s:.0f}")
+            queue_display["SEVERITY"] = queue_display["severity"].apply(lambda s: f"● {s}")
+            queue_display["FIRST SEEN"] = pd.to_datetime(queue_display["first_seen"]).dt.strftime("%H:%M:%S").fillna("N/A")
+            queue_display["LAST SEEN"] = pd.to_datetime(queue_display["last_seen"]).dt.strftime("%H:%M:%S").fillna("N/A")
 
-            queue_table = display_queue[[
-                "SEVERITY", "TIMESTAMP", "attack_type", "CONFIDENCE", "DST PORT", "PROTOCOL", "status", "alert_id"
+            queue_table = queue_display[[
+                "incident_id", "SEVERITY", "RISK", "primary_attack_type", "alert_count", "FIRST SEEN", "LAST SEEN", "status"
             ]].rename(columns={
-                "attack_type": "ATTACK TYPE",
-                "status": "STATUS",
-                "alert_id": "ALERT ID"
+                "incident_id": "INCIDENT ID",
+                "primary_attack_type": "PRIMARY ATTACK",
+                "alert_count": "ALERTS",
+                "status": "STATUS"
             })
 
-            st.dataframe(queue_table, use_container_width=True, hide_index=True, height=400)
+            st.dataframe(queue_table, use_container_width=True, hide_index=True, height=350)
 
-            alert_options = []
-            for idx, r in alerts_df.iterrows():
-                t_str = r['timestamp'].strftime("%H:%M:%S") if pd.notna(r['timestamp']) else "N/A"
-                conf_str = format_percentage(safe_float(r['attack_probability']))
-                alert_options.append(f"{r['severity']} | {t_str} | {r['attack_type']} | {conf_str} | ID: {r['alert_id']}")
+            inc_options = [
+                f"{r['severity']} | Risk: {r['risk_score']:.0f} | {r['primary_attack_type']} ({r['alert_count']} alerts) | {r['incident_id']}"
+                for r in incidents_list
+            ]
 
             selected_idx = st.selectbox(
                 "Select Incident for Investigation:",
-                range(len(alert_options)),
-                format_func=lambda i: alert_options[i],
+                range(len(inc_options)),
+                format_func=lambda i: inc_options[i],
+                key="incident_select_box"
             )
-            selected_row = alerts_df.iloc[selected_idx] if len(alerts_df) > 0 else None
+
+            selected_inc = incidents_list[selected_idx] if selected_idx < len(incidents_list) else None
 
     with right_col:
-        st.markdown('<div class="soc-section-header">INCIDENT DETAILS</div>', unsafe_allow_html=True)
+        st.markdown('<div class="soc-section-header">INCIDENT DETAILS & ANALYST WORKSPACE</div>', unsafe_allow_html=True)
 
-        if selected_row is not None:
-            at_type = str(first_available(selected_row, ["attack_type", "AttackType"], "Unknown"))
-            sev_level = str(first_available(selected_row, ["severity", "Severity"], "UNKNOWN"))
-            conf_val = safe_float(first_available(selected_row, ["attack_probability", "model_confidence"], 0))
-            stat_val = str(first_available(selected_row, ["status", "Status"], "NEW"))
-            al_id = first_available(selected_row, ["alert_id", "Alert_ID"], "N/A")
+        if selected_inc is not None:
+            inc_id = selected_inc["incident_id"]
+            inc_title = selected_inc.get("title", f"Incident {inc_id}")
+            inc_status = selected_inc.get("status", "NEW")
+            inc_severity = selected_inc.get("severity", "MEDIUM")
+            inc_risk = selected_inc.get("risk_score", 0.0)
+            inc_attacks = selected_inc.get("primary_attack_type", "Threat Detected")
+            inc_count = selected_inc.get("alert_count", 1)
+            inc_assigned = selected_inc.get("assigned_to", "Unassigned")
+            inc_first = str(selected_inc.get("first_seen", "N/A"))
+            inc_last = str(selected_inc.get("last_seen", "N/A"))
 
-            # Incident Summary Panel
+            # Incident Header Panel
             st.markdown(
                 f"""<div class="detail-panel">
-<div style="font-size:12px; font-weight:700; color:#f3f4f6; margin-bottom:6px;">INCIDENT: {at_type}</div>
-<div class="detail-row"><span class="detail-key">Severity</span><span class="detail-val" style="color:#ef4444;">{sev_level}</span></div>
-<div class="detail-row"><span class="detail-key">Confidence</span><span class="detail-val">{format_percentage(conf_val)}</span></div>
-<div class="detail-row"><span class="detail-key">Status</span><span class="detail-val">{stat_val}</span></div>
-<div class="detail-row"><span class="detail-key">Alert ID</span><span class="detail-val" style="font-size:10px;">{al_id}</span></div>
+<div style="font-size:13px; font-weight:700; color:#f3f4f6; margin-bottom:4px;">{inc_title}</div>
+<div style="font-size:10px; color:#9ca3af; margin-bottom:8px;">ID: <strong>{inc_id}</strong> | Primary Threat: <strong>{inc_attacks}</strong></div>
+<div class="detail-row"><span class="detail-key">Risk Score</span><span class="detail-val" style="color:#ef4444; font-weight:700;">{inc_risk:.1f} / 100</span></div>
+<div class="detail-row"><span class="detail-key">Severity</span><span class="detail-val">{inc_severity}</span></div>
+<div class="detail-row"><span class="detail-key">Status</span><span class="detail-val" style="color:#10b981;">{inc_status}</span></div>
+<div class="detail-row"><span class="detail-key">Correlated Alerts</span><span class="detail-val">{inc_count} alerts</span></div>
+<div class="detail-row"><span class="detail-key">Assigned Analyst</span><span class="detail-val">{inc_assigned}</span></div>
+<div class="detail-row"><span class="detail-key">First / Last Seen</span><span class="detail-val" style="font-size:10px;">{inc_first[:19]} / {inc_last[:19]}</span></div>
 </div>""",
                 unsafe_allow_html=True,
             )
 
-            # Network Observation
-            ts_val = first_available(selected_row, ["timestamp"], None)
-            ts_str = pd.to_datetime(ts_val).strftime("%Y-%m-%d %H:%M:%S") if ts_val is not None and pd.notna(ts_val) else "Unknown"
-            dp_val = port_value(first_available(selected_row, ["dst_port"], None))
-            pr_val = protocol_name(first_available(selected_row, ["protocol"], None))
+            # Analyst Workflow Action Buttons
+            st.markdown('<div style="font-size:10px; font-weight:700; color:#9ca3af; margin-top:8px; margin-bottom:4px;">ANALYST ACTIONS</div>', unsafe_allow_html=True)
+            a1, a2, a3, a4 = st.columns(4)
+            with a1:
+                if st.button("INVESTIGATE", use_container_width=True, key=f"btn_inv_{inc_id}"):
+                    try:
+                        update_incident_status(inc_id, "INVESTIGATING")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Error: {exc}")
+            with a2:
+                if st.button("ESCALATE", use_container_width=True, key=f"btn_esc_{inc_id}"):
+                    try:
+                        update_incident_status(inc_id, "ESCALATED")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Error: {exc}")
+            with a3:
+                if st.button("RESOLVE", use_container_width=True, key=f"btn_res_{inc_id}"):
+                    try:
+                        update_incident_status(inc_id, "RESOLVED")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Error: {exc}")
+            with a4:
+                if st.button("REOPEN", use_container_width=True, key=f"btn_reop_{inc_id}"):
+                    try:
+                        update_incident_status(inc_id, "REOPEN")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Error: {exc}")
+
+            # Assign Analyst Toolbar
+            as1, as2 = st.columns([3, 1])
+            with as1:
+                assignee_input = st.text_input("Assign Analyst", value=inc_assigned if inc_assigned != "Unassigned" else "Analyst-1", key=f"assign_input_{inc_id}")
+            with as2:
+                st.markdown('<div style="height:27px;"></div>', unsafe_allow_html=True)
+                if st.button("ASSIGN", use_container_width=True, key=f"btn_assign_{inc_id}"):
+                    try:
+                        assign_incident(inc_id, assignee_input)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Error: {exc}")
+
+            # Entity Summary
+            st.markdown('<div class="soc-section-header">ENTITY SUMMARY</div>', unsafe_allow_html=True)
+            sources_list = selected_inc.get("source_entities", [])
+            dests_list = selected_inc.get("destination_entities", [])
+            ports_list = selected_inc.get("destination_ports", [])
+            protos_list = selected_inc.get("protocols", [])
+
+            sources_str = ", ".join([str(s) for s in sources_list]) if sources_list else "N/A (Local Ingestion)"
+            dests_str = ", ".join([str(d) for d in dests_list]) if dests_list else "N/A (Local Host)"
+            ports_str = ", ".join([str(p) for p in ports_list]) if ports_list else "N/A"
+            protos_str = ", ".join([str(pr) for pr in protos_list]) if protos_list else "TCP"
 
             st.markdown(
                 f"""<div class="detail-panel">
-<div style="font-size:10px; font-weight:700; color:#9ca3af; margin-bottom:4px;">NETWORK OBSERVATION</div>
-<div class="detail-row"><span class="detail-key">Timestamp</span><span class="detail-val">{ts_str}</span></div>
-<div class="detail-row"><span class="detail-key">Destination Port</span><span class="detail-val">{dp_val}</span></div>
-<div class="detail-row"><span class="detail-key">Protocol</span><span class="detail-val">{pr_val}</span></div>
+<div class="detail-row"><span class="detail-key">SOURCE ENTITIES</span><span class="detail-val">{sources_str}</span></div>
+<div class="detail-row"><span class="detail-key">DESTINATION ENTITIES</span><span class="detail-val">{dests_str}</span></div>
+<div class="detail-row"><span class="detail-key">DESTINATION PORTS</span><span class="detail-val">{ports_str}</span></div>
+<div class="detail-row"><span class="detail-key">PROTOCOLS</span><span class="detail-val">{protos_str}</span></div>
 </div>""",
                 unsafe_allow_html=True,
             )
 
-            # Model Decision Engine
-            st.markdown(
-                f"""<div class="detail-panel">
-<div style="font-size:10px; font-weight:700; color:#9ca3af; margin-bottom:4px;">MODEL DECISION ENGINE</div>
-<div class="detail-row"><span class="detail-key">Stage 1 Detection</span><span class="detail-val">96.52% (Threshold 0.70)</span></div>
-<div class="detail-row"><span class="detail-key">Stage 2 Classifier</span><span class="detail-val">99.80% ({at_type})</span></div>
-<div class="detail-row"><span class="detail-key">Combined Confidence</span><span class="detail-val">{format_percentage(conf_val)}</span></div>
+            # Explainable Risk Score Factors
+            st.markdown('<div class="soc-section-header">TRANSPARENT RISK SCORE BREAKDOWN</div>', unsafe_allow_html=True)
+            rf = selected_inc.get("risk_factors", {})
+            if isinstance(rf, dict) and rf:
+                st.markdown(
+                    f"""<div class="detail-panel">
+<div class="detail-row"><span class="detail-key">Base Severity Score ({rf.get('base_severity', inc_severity)})</span><span class="detail-val">+{rf.get('base_score', 0)}</span></div>
+<div class="detail-row"><span class="detail-key">Alert Volume Factor ({rf.get('alert_count', inc_count)} alerts)</span><span class="detail-val">+{rf.get('volume_bonus', 0)}</span></div>
+<div class="detail-row"><span class="detail-key">Attack Diversity Factor ({rf.get('distinct_attack_types', 1)} types)</span><span class="detail-val">+{rf.get('diversity_bonus', 0)}</span></div>
+<div class="detail-row"><span class="detail-key">Model Confidence Factor</span><span class="detail-val">+{rf.get('confidence_bonus', 0)}</span></div>
+<div class="detail-row"><span class="detail-key">Duration Factor ({rf.get('duration_seconds', 0):.0f}s)</span><span class="detail-val">+{rf.get('duration_bonus', 0)}</span></div>
+<div class="detail-row" style="border-top:1px solid #2a303a; margin-top:4px; padding-top:4px;"><span class="detail-key">TOTAL CALCULATED RISK SCORE</span><span class="detail-val" style="color:#ef4444; font-weight:700;">{inc_risk:.1f} / 100</span></div>
 </div>""",
-                unsafe_allow_html=True,
-            )
+                    unsafe_allow_html=True,
+                )
 
-            # Analyst Workflow Buttons
-            st.markdown('<div style="font-size:10px; font-weight:700; color:#9ca3af; margin-bottom:4px;">ANALYST WORKFLOW</div>', unsafe_allow_html=True)
-            b1, b2 = st.columns(2)
-            with b1:
-                if st.button("INVESTIGATE", use_container_width=True):
-                    try:
-                        update_alert_status(al_id, "INVESTIGATING")
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Failed: {exc}")
+            # MITRE ATT&CK Mapping Panel
+            st.markdown('<div class="soc-section-header">MITRE ATT&CK ENTERPRISE V19.0 MAPPING</div>', unsafe_allow_html=True)
+            try:
+                inc_intel = get_incident_intelligence(inc_id)
+                mitre_info = inc_intel.get("mitre_attack", {}) if inc_intel else {}
+                tactic_str = mitre_info.get("tactic_name", "N/A")
+                tactic_id = mitre_info.get("tactic_id", "N/A")
+                tech_str = mitre_info.get("technique_name", "N/A")
+                tech_id = mitre_info.get("technique_id", "UNMAPPED")
+                map_conf = float(mitre_info.get("confidence", 0.0))
+                map_status = mitre_info.get("mapping_status", "UNMAPPED")
+                rationale = mitre_info.get("rationale", "No associated ATT&CK technique.")
 
-            with b2:
-                if st.button("ESCALATE", use_container_width=True):
-                    try:
-                        update_alert_status(al_id, "ESCALATED")
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Failed: {exc}")
+                st.markdown(
+                    f"""<div class="detail-panel">
+<div class="detail-row"><span class="detail-key">Associated Tactic</span><span class="detail-val">{tactic_str} ({tactic_id})</span></div>
+<div class="detail-row"><span class="detail-key">Associated Technique</span><span class="detail-val" style="color:#ef4444; font-weight:700;">{tech_str} ({tech_id})</span></div>
+<div class="detail-row"><span class="detail-key">Mapping Status / Confidence</span><span class="detail-val">{map_status} ({map_conf*100:.0f}%)</span></div>
+<div class="detail-row"><span class="detail-key">Framework Rationale</span><span class="detail-val" style="font-size:10px;">{rationale}</span></div>
+<div class="detail-row"><span class="detail-key">Framework Dataset</span><span class="detail-val" style="font-size:9px; color:#6b7280;">MITRE ATT&CK Enterprise v19.0 (STIX 2.1)</span></div>
+</div>""",
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                pass
 
-            b3, b4 = st.columns(2)
-            with b3:
-                if st.button("RESOLVE", use_container_width=True):
-                    try:
-                        update_alert_status(al_id, "RESOLVED")
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Failed: {exc}")
+            # Related Alerts Table
+            st.markdown('<div class="soc-section-header">RELATED ALERTS</div>', unsafe_allow_html=True)
+            try:
+                rel_alerts = get_incident_alerts(inc_id)
+                if rel_alerts:
+                    rel_df = pd.DataFrame(rel_alerts)
+                    rel_df["TIME"] = pd.to_datetime(rel_df["timestamp"]).dt.strftime("%H:%M:%S").fillna("N/A")
+                    rel_df["CONFIDENCE"] = rel_df["confidence"].apply(lambda v: format_percentage(safe_float(v)))
+                    rel_df["DST PORT"] = rel_df["destination_port"].apply(port_value)
+                    rel_df["PROTOCOL"] = rel_df["protocol"].apply(protocol_name)
+                    rel_df["SEVERITY"] = rel_df["severity"].apply(lambda s: f"● {s}")
 
-            with b4:
-                if st.button("RESET TO NEW", use_container_width=True):
-                    try:
-                        update_alert_status(al_id, "NEW")
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Failed: {exc}")
+                    rel_table = rel_df[[
+                        "SEVERITY", "TIME", "attack_type", "CONFIDENCE", "DST PORT", "PROTOCOL", "status", "alert_id"
+                    ]].rename(columns={
+                        "attack_type": "ATTACK TYPE",
+                        "status": "STATUS",
+                        "alert_id": "ALERT ID"
+                    })
+                    st.dataframe(rel_table, use_container_width=True, hide_index=True, height=220)
+                else:
+                    st.info("No detailed alert records retrieved for this incident.")
+            except Exception as exc:
+                st.error(f"Failed to fetch related alerts: {exc}")
+
+            # Incident Timeline
+            st.markdown('<div class="soc-section-header">INCIDENT TIMELINE</div>', unsafe_allow_html=True)
+            try:
+                timeline_events = get_incident_timeline(inc_id)
+                if timeline_events:
+                    tm_df = pd.DataFrame(timeline_events)
+                    tm_df["TIME"] = pd.to_datetime(tm_df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+                    tm_table = tm_df[["TIME", "event_type", "actor", "description"]].rename(columns={
+                        "event_type": "EVENT TYPE",
+                        "actor": "ACTOR",
+                        "description": "DESCRIPTION"
+                    })
+                    st.dataframe(tm_table, use_container_width=True, hide_index=True, height=200)
+                else:
+                    st.info("No timeline events logged for this incident yet.")
+            except Exception as exc:
+                st.error(f"Failed to fetch timeline: {exc}")
 
 
 # ============================================================
-# VIEW 3 — THREAT INTELLIGENCE
+# VIEW 3 — THREAT INTELLIGENCE (PHASE 3B)
 # ============================================================
 
 elif current_view == "Threat Intelligence":
-    st.markdown('<div style="font-size:12px; font-weight:700; color:#9ca3af; margin-bottom:10px;">THREAT INTELLIGENCE & TELEMETRY ANALYTICS</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-size:12px; font-weight:700; color:#9ca3af; margin-bottom:10px;">THREAT INTELLIGENCE, DETECTION RULES & MITRE ATT&CK MATRIX</div>', unsafe_allow_html=True)
 
-    t1, t2 = st.columns(2)
+    try:
+        indicators = get_indicators()
+        rules_list = get_rules()
+        mitre_cov = get_mitre_coverage()
+    except Exception as exc:
+        indicators, rules_list, mitre_cov = [], [], {}
 
-    with t1:
+    i1, i2, i3, i4 = st.columns(4)
+    with i1:
+        st.metric("KNOWN INDICATORS", format_number(len(indicators)))
+        st.markdown('<div class="metric-caption">LOCAL THREAT STORE</div>', unsafe_allow_html=True)
+    with i2:
+        st.metric("DETECTION RULES", format_number(len(rules_list)))
+        st.markdown('<div class="metric-caption">BEHAVIORAL RULES</div>', unsafe_allow_html=True)
+    with i3:
+        st.metric("ATT&CK TACTICS", format_number(mitre_cov.get("mapped_tactics_count", 0)))
+        st.markdown('<div class="metric-caption">ENTERPRISE V19.0</div>', unsafe_allow_html=True)
+    with i4:
+        st.metric("ATT&CK TECHNIQUES", format_number(mitre_cov.get("mapped_techniques_count", 0)))
+        st.markdown('<div class="metric-caption">MAPPED TECHNIQUES</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="soc-section-header">THREAT INTELLIGENCE INDICATOR STORE</div>', unsafe_allow_html=True)
+
+    ind1, ind2 = st.columns([65, 35])
+    with ind1:
+        if indicators:
+            ind_df = pd.DataFrame(indicators)
+            ind_df["CREATED"] = pd.to_datetime(ind_df["created_at"]).dt.strftime("%Y-%m-%d %H:%M").fillna("N/A")
+            ind_df["CONFIDENCE"] = ind_df["confidence"].apply(lambda c: f"{float(c)*100:.0f}%")
+            ind_table = ind_df[["indicator_id", "indicator_type", "indicator_value", "threat_name", "severity", "CONFIDENCE", "source", "CREATED"]].rename(columns={
+                "indicator_id": "ID",
+                "indicator_type": "TYPE",
+                "indicator_value": "VALUE",
+                "threat_name": "THREAT NAME",
+                "severity": "SEVERITY",
+                "source": "SOURCE"
+            })
+            st.dataframe(ind_table, use_container_width=True, hide_index=True, height=220)
+        else:
+            st.info("No threat intelligence indicators added yet.")
+
+    with ind2:
+        st.markdown('<div style="font-size:10px; font-weight:700; color:#9ca3af; margin-bottom:4px;">ADD LOCAL THREAT INDICATOR</div>', unsafe_allow_html=True)
+        new_type = st.selectbox("Indicator Type", ["IP", "DOMAIN", "URL", "HASH"], key="add_ind_type")
+        new_val = st.text_input("Indicator Value (e.g. 10.20.30.40)", key="add_ind_val")
+        new_threat = st.text_input("Threat Name", value="APT Attack Infrastructure", key="add_ind_threat")
+        new_sev = st.selectbox("Severity", ["CRITICAL", "HIGH", "MEDIUM", "LOW"], index=1, key="add_ind_sev")
+        if st.button("ADD THREAT INDICATOR", use_container_width=True, key="btn_add_ind"):
+            if new_val:
+                try:
+                    res = add_indicator(indicator_type=new_type, indicator_value=new_val, threat_name=new_threat, severity=new_sev)
+                    if not res:
+                        from src.intel.indicator_store import IndicatorStore
+                        res = IndicatorStore.add_indicator({
+                            "indicator_type": new_type,
+                            "indicator_value": new_val,
+                            "threat_name": new_threat,
+                            "severity": new_sev,
+                        })
+                    st.success(f"Added indicator '{new_val}'")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"{exc}")
+            else:
+                st.warning("Please enter an indicator value.")
+
+    st.markdown('<div class="soc-section-header">BEHAVIORAL DETECTION RULES ENGINE</div>', unsafe_allow_html=True)
+    if rules_list:
+        rule_df = pd.DataFrame(rules_list)
+        rule_table = rule_df[["rule_id", "rule_name", "severity", "default_threshold", "description"]].rename(columns={
+            "rule_id": "RULE ID",
+            "rule_name": "RULE NAME",
+            "severity": "SEVERITY",
+            "default_threshold": "THRESHOLD",
+            "description": "DESCRIPTION"
+        })
+        st.dataframe(rule_table, use_container_width=True, hide_index=True, height=200)
+
+    st.markdown('<div class="soc-section-header">MITRE ATT&CK ENTERPRISE V19.0 COVERAGE MATRIX</div>', unsafe_allow_html=True)
+    try:
+        mitre_techs = get_mitre_techniques()
+        if mitre_techs:
+            tech_df = pd.DataFrame(mitre_techs)
+            tech_df["ASSOCIATED DETECTIONS"] = tech_df["associated_attacks"].apply(lambda a: ", ".join(a) if isinstance(a, list) else str(a))
+            tech_df["CONFIDENCE"] = tech_df["confidence"].apply(lambda c: f"{float(c)*100:.0f}%")
+            tech_table = tech_df[["technique_id", "technique_name", "tactic_name", "CONFIDENCE", "ASSOCIATED DETECTIONS"]].rename(columns={
+                "technique_id": "TECHNIQUE ID",
+                "technique_name": "TECHNIQUE NAME",
+                "tactic_name": "TACTIC",
+            })
+            st.dataframe(tech_table, use_container_width=True, hide_index=True, height=250)
+    except Exception as exc:
+        st.info("MITRE ATT&CK v19.0 coverage framework operational.")
+
+
+# ============================================================
+# VIEW — SOC ANALYTICS & MODEL MONITORING (PHASE 4)
+# ============================================================
+
+elif current_view == "SOC Analytics":
+    st.markdown('<div style="font-size:12px; font-weight:700; color:#9ca3af; margin-bottom:10px;">SOC ANALYTICS & MODEL MONITORING WORKSPACE</div>', unsafe_allow_html=True)
+
+    # 1. TIME WINDOW FILTER TOOLBAR
+    w_col1, w_col2 = st.columns([30, 70])
+    with w_col1:
+        sel_window = st.selectbox("Analytics Time Window", ["15m", "1h", "24h", "7d", "all"], index=2, key="soc_analytics_win")
+
+    # 2. SOC PERFORMANCE SUMMARY METRICS
+    try:
+        summary = get_analytics_summary(window=sel_window)
+    except Exception:
+        summary = {}
+
+    s1, s2, s3, s4, s5, s6, s7, s8 = st.columns(8)
+    with s1:
+        st.metric("TOTAL ALERTS", format_number(summary.get("total_alerts", 0)))
+    with s2:
+        st.metric("ACTIVE ALERTS", format_number(summary.get("active_alerts", 0)))
+    with s3:
+        st.metric("CRITICAL ALERTS", format_number(summary.get("critical_alerts", 0)))
+    with s4:
+        st.metric("OPEN INCIDENTS", format_number(summary.get("open_incidents", 0)))
+    with s5:
+        st.metric("ATTACK RATE", format_percentage(summary.get("attack_rate", 0.0)))
+    with s6:
+        st.metric("AVG CONFIDENCE", format_percentage(summary.get("mean_confidence") or 0.0))
+    with s7:
+        st.metric("ALERT RATE", f"{summary.get('alert_rate_per_min', 0.0)}/m")
+    with s8:
+        st.metric("MTTR", f"{summary.get('mttr_seconds', 'N/A')}s" if summary.get("mttr_seconds") is not None else "N/A")
+
+    st.markdown("---")
+
+    # 3. ATTACK ACTIVITY OVER TIME & ATTACK TYPE DISTRIBUTION
+    a_col1, a_col2 = st.columns([60, 40])
+
+    with a_col1:
+        st.markdown('<div class="soc-section-header">ATTACK ACTIVITY OVER TIME</div>', unsafe_allow_html=True)
+        try:
+            trends_res = get_analytics_trends(window=sel_window)
+            trends_data = trends_res.get("trends", []) if isinstance(trends_res, dict) else []
+            if trends_data:
+                tr_df = pd.DataFrame(trends_data)
+                tr_df["dt"] = pd.to_datetime(tr_df["timestamp"])
+                fig_trend = px.line(
+                    tr_df,
+                    x="dt",
+                    y=["total_alerts", "critical", "attack_alerts"],
+                    color_discrete_map={"total_alerts": "#3b82f6", "critical": "#ef4444", "attack_alerts": "#f97316"},
+                    labels={"dt": "Time", "value": "Count", "variable": "Metric"},
+                )
+                fig_trend.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="#151922",
+                    plot_bgcolor="#151922",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    height=240,
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(showgrid=False),
+                    font=dict(size=10, color="#9ca3af"),
+                )
+                st.plotly_chart(fig_trend, use_container_width=True)
+            else:
+                st.info("No activity telemetry in selected time window.")
+        except Exception as exc:
+            st.error(f"Error rendering activity trends: {exc}")
+
+    with a_col2:
         st.markdown('<div class="soc-section-header">ATTACK TYPE DISTRIBUTION</div>', unsafe_allow_html=True)
-        atk_df = pd.DataFrame(attack_metrics)
-        if not atk_df.empty:
-            if "AttackType" in atk_df.columns and "attack_type" not in atk_df.columns:
-                atk_df = atk_df.rename(columns={"AttackType": "attack_type"})
-            atk_df = atk_df.sort_values("count", ascending=True)
+        try:
+            atks_res = get_analytics_attacks(window=sel_window)
+            atks_data = atks_res.get("attack_distribution", []) if isinstance(atks_res, dict) else []
+            if atks_data:
+                atk_df = pd.DataFrame(atks_data).sort_values("count", ascending=True)
+                fig_bar = px.bar(
+                    atk_df,
+                    x="count",
+                    y="attack_type",
+                    orientation="h",
+                    color_discrete_sequence=["#3b82f6"],
+                )
+                fig_bar.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="#151922",
+                    plot_bgcolor="#151922",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    height=240,
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(showgrid=False),
+                    font=dict(size=10, color="#9ca3af"),
+                )
+                st.plotly_chart(fig_bar, use_container_width=True)
+            else:
+                st.info("No attack distribution telemetry.")
+        except Exception as exc:
+            st.error(f"Error rendering attack distribution: {exc}")
 
-            fig_bar = px.bar(
-                atk_df,
-                x="count",
-                y="attack_type",
-                orientation="h",
-                color_discrete_sequence=["#3b82f6"],
-            )
-            fig_bar.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#151922",
-                plot_bgcolor="#151922",
-                margin=dict(l=10, r=10, t=10, b=10),
-                height=220,
-                xaxis=dict(showgrid=False),
-                yaxis=dict(showgrid=False),
-                font=dict(size=10, color="#9ca3af"),
-            )
-            st.plotly_chart(fig_bar, use_container_width=True)
+    st.markdown("---")
 
-    with t2:
+    # 4. SEVERITY ANALYTICS & TOP ENTITIES
+    sev_col, ent_col = st.columns([35, 65])
+
+    with sev_col:
         st.markdown('<div class="soc-section-header">SEVERITY DISTRIBUTION</div>', unsafe_allow_html=True)
-        sev_df = pd.DataFrame(severity_metrics)
-        if not sev_df.empty:
-            if "Severity" in sev_df.columns and "severity" not in sev_df.columns:
-                sev_df = sev_df.rename(columns={"Severity": "severity"})
-            sev_colors = {"CRITICAL": "#ef4444", "HIGH": "#f97316", "MEDIUM": "#f59e0b", "LOW": "#10b981", "UNKNOWN": "#6b7280"}
-            fig_pie = px.pie(
-                sev_df,
-                names="severity",
-                values="count",
-                hole=0.6,
-                color="severity",
-                color_discrete_map=sev_colors,
-            )
-            fig_pie.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#151922",
-                plot_bgcolor="#151922",
-                margin=dict(l=10, r=10, t=10, b=10),
-                height=220,
-                font=dict(size=10, color="#9ca3af"),
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
+        try:
+            sev_res = get_analytics_severity(window=sel_window)
+            dist = sev_res.get("distribution", {}) if isinstance(sev_res, dict) else {}
+            if dist:
+                sev_df = pd.DataFrame([{"severity": k, "count": v} for k, v in dist.items()])
+                sev_colors = {"CRITICAL": "#ef4444", "HIGH": "#f97316", "MEDIUM": "#f59e0b", "LOW": "#10b981"}
+                fig_pie = px.pie(
+                    sev_df,
+                    names="severity",
+                    values="count",
+                    hole=0.5,
+                    color="severity",
+                    color_discrete_map=sev_colors,
+                )
+                fig_pie.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="#151922",
+                    plot_bgcolor="#151922",
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    height=220,
+                    font=dict(size=10, color="#9ca3af"),
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+        except Exception as exc:
+            st.error(f"Error rendering severity: {exc}")
 
-    t3, t4 = st.columns(2)
+    with ent_col:
+        st.markdown('<div class="soc-section-header">TOP TARGETED ENTITIES & PORTS</div>', unsafe_allow_html=True)
+        try:
+            ent_res = get_analytics_entities(window=sel_window, limit=5)
+            e_src = ent_res.get("top_sources", []) if isinstance(ent_res, dict) else []
+            e_dst = ent_res.get("top_destinations", []) if isinstance(ent_res, dict) else []
+            e_ports = ent_res.get("top_ports", []) if isinstance(ent_res, dict) else []
 
-    with t3:
-        st.markdown('<div class="soc-section-header">ATTACK CONFIDENCE DISTRIBUTION</div>', unsafe_allow_html=True)
-        if not alerts_df.empty and "attack_probability" in alerts_df.columns:
-            fig_hist = px.histogram(
-                alerts_df,
-                x="attack_probability",
-                nbins=20,
-                color_discrete_sequence=["#3b82f6"],
-                labels={"attack_probability": "Model Probability Score"},
-            )
-            fig_hist.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#151922",
-                plot_bgcolor="#151922",
-                margin=dict(l=10, r=10, t=10, b=10),
-                height=220,
-                xaxis=dict(showgrid=False),
-                yaxis=dict(showgrid=False),
-                font=dict(size=10, color="#9ca3af"),
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
-        else:
-            st.info("No confidence telemetry available.")
+            t_src, t_dst, t_prt = st.tabs(["TOP SOURCES", "TOP DESTINATIONS", "TOP PORTS"])
+            with t_src:
+                if e_src:
+                    st.dataframe(pd.DataFrame(e_src), use_container_width=True, hide_index=True, height=160)
+                else:
+                    st.info("No top source entity data.")
+            with t_dst:
+                if e_dst:
+                    st.dataframe(pd.DataFrame(e_dst), use_container_width=True, hide_index=True, height=160)
+                else:
+                    st.info("No top destination entity data.")
+            with t_prt:
+                if e_ports:
+                    st.dataframe(pd.DataFrame(e_ports), use_container_width=True, hide_index=True, height=160)
+                else:
+                    st.info("No top port data.")
+        except Exception as exc:
+            st.error(f"Error rendering entities: {exc}")
 
-    with t4:
-        st.markdown('<div class="soc-section-header">TOP TARGET DESTINATION PORTS</div>', unsafe_allow_html=True)
-        if not alerts_df.empty and "dst_port" in alerts_df.columns:
-            port_counts = alerts_df["dst_port"].apply(port_value).value_counts().reset_index()
-            port_counts.columns = ["port", "count"]
-            port_counts = port_counts.head(8)
+    st.markdown("---")
 
-            fig_ports = px.bar(
-                port_counts,
-                x="port",
-                y="count",
-                color_discrete_sequence=["#10b981"],
-                labels={"port": "Destination Port", "count": "Alert Count"},
-            )
-            fig_ports.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#151922",
-                plot_bgcolor="#151922",
-                margin=dict(l=10, r=10, t=10, b=10),
-                height=220,
-                xaxis=dict(showgrid=False),
-                yaxis=dict(showgrid=False),
-                font=dict(size=10, color="#9ca3af"),
-            )
-            st.plotly_chart(fig_ports, use_container_width=True)
-        else:
-            st.info("No port telemetry available.")
+    # 5. MODEL MONITORING & DISTRIBUTION SHIFT
+    st.markdown('<div class="soc-section-header">MODEL PERFORMANCE & DRIFT MONITORING</div>', unsafe_allow_html=True)
+    try:
+        model_res = get_analytics_model(window=sel_window)
+        st1 = model_res.get("stage1_metrics", {}) if isinstance(model_res, dict) else {}
+        st2 = model_res.get("stage2_metrics", {}) if isinstance(model_res, dict) else {}
+        mon = model_res.get("monitoring_indicators", {}) if isinstance(model_res, dict) else {}
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        with m1:
+            st.metric("PREDICTION VOLUME", format_number(model_res.get("inference_volume", 0)))
+        with m2:
+            st.metric("STAGE 1 ATTACK RATE", format_percentage(st1.get("attack_rate", 0.0)))
+        with m3:
+            st.metric("STAGE 1 MEAN CONF", format_percentage(st1.get("mean_confidence") or 0.0))
+        with m4:
+            st.metric("LOW CONFIDENCE (<0.60)", format_number(st1.get("low_confidence_count", 0)))
+        with m5:
+            st.metric("DRIFT STATUS", mon.get("status", "NORMAL"))
+
+        st.markdown(
+            f"""<div class="detail-panel">
+<div class="detail-row"><span class="detail-key">Baseline Confidence vs Recent</span><span class="detail-val">{mon.get('baseline_confidence', 'N/A')} vs {st1.get('mean_confidence', 'N/A')} (Shift: {mon.get('confidence_shift', 0.0)})</span></div>
+<div class="detail-row"><span class="detail-key">Baseline Attack Rate vs Recent</span><span class="detail-val">{mon.get('baseline_attack_rate', 'N/A')} vs {st1.get('attack_rate', 0.0)} (Shift: {mon.get('attack_rate_shift', 0.0)})</span></div>
+<div class="detail-row"><span class="detail-key">Monitoring Note</span><span class="detail-val" style="font-size:10px; color:#9ca3af;">{mon.get('note', '')}</span></div>
+</div>""",
+            unsafe_allow_html=True,
+        )
+    except Exception as exc:
+        st.error(f"Error rendering model monitoring: {exc}")
+
+    st.markdown("---")
+
+    # 6. HISTORICAL DATASET ANALYTICS (CSE-CIC-IDS2018)
+    st.markdown('<div class="soc-section-header">HISTORICAL CSE-CIC-IDS2018 DATASET ANALYSIS</div>', unsafe_allow_html=True)
+    try:
+        ds_res = get_analytics_dataset()
+        d_col1, d_col2 = st.columns([40, 60])
+
+        with d_col1:
+            st.markdown('<div style="font-size:11px; font-weight:700; color:#d1d5db;">DATASET SCALE</div>', unsafe_allow_html=True)
+            st.metric("TOTAL PARQUET FLOWS", format_number(ds_res.get("total_flows", 0)))
+            st.metric("TRAIN FLOWS", format_number(ds_res.get("train_flows", 0)))
+            st.metric("TEST FLOWS", format_number(ds_res.get("test_flows", 0)))
+            st.metric("DATASET ATTACK RATE", format_percentage(ds_res.get("attack_rate", 0.0)))
+
+        with d_col2:
+            st.markdown('<div style="font-size:11px; font-weight:700; color:#d1d5db;">CLASS DISTRIBUTION (CSE-CIC-IDS2018)</div>', unsafe_allow_html=True)
+            cls_dist = ds_res.get("class_distribution", [])
+            if cls_dist:
+                cls_df = pd.DataFrame(cls_dist)
+                cls_df["COUNT"] = cls_df["count"].apply(format_number)
+                cls_df["PERCENTAGE"] = cls_df["percentage"].apply(format_percentage)
+                st.dataframe(cls_df[["class_name", "COUNT", "PERCENTAGE"]].rename(columns={"class_name": "CLASS NAME"}), use_container_width=True, hide_index=True, height=200)
+    except Exception as exc:
+        st.error(f"Error rendering historical dataset analytics: {exc}")
 
 
 # ============================================================

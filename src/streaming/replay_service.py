@@ -30,7 +30,7 @@ FastAPI / Dashboard
 import argparse
 import time
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col

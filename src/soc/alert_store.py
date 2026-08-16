@@ -55,9 +55,20 @@ def get_connection():
 
 def initialize_database():
     """
-    Create the alert-management and replay-history tables if they do not exist.
+    Create the alert-management, replay-history, and Phase 3A incident tables if they do not exist.
     """
+    import shutil
     import time
+
+    # Automatic backup before schema modification if database exists
+    if DB_PATH.exists():
+        try:
+            bak_path = DB_PATH.with_name("alerts.db.bak")
+            if not bak_path.exists():
+                shutil.copy2(DB_PATH, bak_path)
+        except Exception:
+            pass
+
     for attempt in range(5):
         try:
             connection = get_connection()
@@ -75,20 +86,24 @@ def initialize_database():
                     protocol TEXT,
                     status TEXT NOT NULL DEFAULT 'NEW',
                     replay_run_id TEXT,
+                    incident_id TEXT,
+                    source_ip TEXT,
+                    destination_ip TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
                 """
             )
 
-            # Check if replay_run_id column exists for existing database instances
+            # Check existing columns for database migration
             cursor.execute("PRAGMA table_info(alerts)")
             columns = [row[1] for row in cursor.fetchall()]
-            if "replay_run_id" not in columns:
-                try:
-                    cursor.execute("ALTER TABLE alerts ADD COLUMN replay_run_id TEXT")
-                except Exception:
-                    pass
+            for col, col_type in [("replay_run_id", "TEXT"), ("incident_id", "TEXT"), ("source_ip", "TEXT"), ("destination_ip", "TEXT")]:
+                if col not in columns:
+                    try:
+                        cursor.execute(f"ALTER TABLE alerts ADD COLUMN {col} {col_type}")
+                    except Exception:
+                        pass
 
             cursor.execute(
                 """
@@ -105,6 +120,148 @@ def initialize_database():
                     alerts_inserted INTEGER NOT NULL,
                     throughput REAL NOT NULL,
                     status TEXT NOT NULL DEFAULT 'COMPLETED'
+                )
+                """
+            )
+
+            # Phase 3A Incident Layer Tables
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS incidents (
+                    incident_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'NEW',
+                    severity TEXT NOT NULL,
+                    risk_score REAL NOT NULL DEFAULT 0.0,
+                    risk_factors TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    first_seen TEXT NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    alert_count INTEGER NOT NULL DEFAULT 0,
+                    primary_attack_type TEXT NOT NULL,
+                    source_entities TEXT,
+                    destination_entities TEXT,
+                    destination_ports TEXT,
+                    protocols TEXT,
+                    assigned_to TEXT DEFAULT 'Unassigned',
+                    summary TEXT
+                )
+                """
+            )
+
+            # Migration check for incidents table
+            cursor.execute("PRAGMA table_info(incidents)")
+            inc_cols = [row[1] for row in cursor.fetchall()]
+            for col, col_type in [
+                ("title", "TEXT DEFAULT ''"),
+                ("status", "TEXT DEFAULT 'NEW'"),
+                ("severity", "TEXT DEFAULT 'MEDIUM'"),
+                ("risk_score", "REAL DEFAULT 0.0"),
+                ("risk_factors", "TEXT"),
+                ("created_at", "TEXT DEFAULT ''"),
+                ("updated_at", "TEXT DEFAULT ''"),
+                ("first_seen", "TEXT DEFAULT ''"),
+                ("last_seen", "TEXT DEFAULT ''"),
+                ("alert_count", "INTEGER DEFAULT 0"),
+                ("primary_attack_type", "TEXT DEFAULT 'Threat Detected'"),
+                ("source_entities", "TEXT"),
+                ("destination_entities", "TEXT"),
+                ("destination_ports", "TEXT"),
+                ("protocols", "TEXT"),
+                ("assigned_to", "TEXT DEFAULT 'Unassigned'"),
+                ("summary", "TEXT"),
+            ]:
+                if col not in inc_cols:
+                    try:
+                        cursor.execute(f"ALTER TABLE incidents ADD COLUMN {col} {col_type}")
+                    except Exception:
+                        pass
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS incident_alerts (
+                    incident_id TEXT NOT NULL,
+                    alert_id TEXT NOT NULL,
+                    added_at TEXT NOT NULL,
+                    PRIMARY KEY (incident_id, alert_id)
+                )
+                """
+            )
+
+            # Migration check for incident_alerts table
+            cursor.execute("PRAGMA table_info(incident_alerts)")
+            ia_cols = [row[1] for row in cursor.fetchall()]
+            if "added_at" not in ia_cols:
+                try:
+                    cursor.execute("ALTER TABLE incident_alerts ADD COLUMN added_at TEXT DEFAULT ''")
+                except Exception:
+                    pass
+
+            # Migration check for alerts table (Phase 3B enrichment columns)
+            cursor.execute("PRAGMA table_info(alerts)")
+            alert_cols = [row[1] for row in cursor.fetchall()]
+            for col, col_type in [
+                ("intel_match", "INTEGER DEFAULT 0"),
+                ("intel_threat_name", "TEXT"),
+                ("intel_confidence", "REAL"),
+                ("mitre_technique_id", "TEXT"),
+                ("mitre_tactic_id", "TEXT"),
+            ]:
+                if col not in alert_cols:
+                    try:
+                        cursor.execute(f"ALTER TABLE alerts ADD COLUMN {col} {col_type}")
+                    except Exception:
+                        pass
+
+            # Phase 3B Threat Intelligence Tables
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS threat_intel_indicators (
+                    indicator_id TEXT PRIMARY KEY,
+                    indicator_type TEXT NOT NULL,
+                    indicator_value TEXT NOT NULL UNIQUE,
+                    threat_name TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 0.90,
+                    severity TEXT NOT NULL DEFAULT 'HIGH',
+                    source TEXT NOT NULL DEFAULT 'LOCAL_SOC',
+                    tags TEXT,
+                    first_seen TEXT NOT NULL,
+                    last_seen TEXT NOT NULL,
+                    expires_at TEXT,
+                    description TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS detection_rule_matches (
+                    match_id TEXT PRIMARY KEY,
+                    rule_id TEXT NOT NULL,
+                    rule_name TEXT NOT NULL,
+                    alert_id TEXT NOT NULL,
+                    incident_id TEXT,
+                    severity TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    evidence TEXT,
+                    timestamp TEXT NOT NULL,
+                    FOREIGN KEY (alert_id) REFERENCES alerts(alert_id)
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS incident_timeline (
+                    event_id TEXT PRIMARY KEY,
+                    incident_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT 'SYSTEM',
+                    description TEXT NOT NULL,
+                    details TEXT
                 )
                 """
             )
@@ -234,6 +391,7 @@ def sync_alerts(
     ).isoformat()
 
     inserted = 0
+    newly_inserted_attack_alerts = []
 
     # Track duplicate occurrences.
 
@@ -252,10 +410,13 @@ def sync_alerts(
             occurrence + 1
         )
 
-        alert_id = generate_alert_id(
-            row,
-            occurrence,
-        )
+        if "alert_id" in row and pd.notna(row["alert_id"]) and str(row["alert_id"]).strip():
+            alert_id = str(row["alert_id"])
+        else:
+            alert_id = generate_alert_id(
+                row,
+                occurrence,
+            )
 
         # Check whether this exact alert
         # already exists.
@@ -286,40 +447,34 @@ def sync_alerts(
             timestamp = None
 
         # Confidence
-
-        confidence = row.get(
-            "attack_probability"
-        )
-
-        if pd.isna(confidence):
+        confidence = row.get("attack_probability")
+        if pd.isna(confidence) or confidence is None:
+            confidence = row.get("confidence")
+        if pd.isna(confidence) or confidence is None:
             confidence = 0.0
 
         # Destination port
+        destination_port = row.get("Dst_Port")
+        if pd.isna(destination_port) or destination_port is None:
+            destination_port = row.get("destination_port")
+        if pd.isna(destination_port) or destination_port is None:
+            destination_port = row.get("Destination_Port")
 
-        destination_port = row.get(
-            "Dst_Port"
-        )
-
-        if pd.notna(destination_port):
-
+        if pd.notna(destination_port) and destination_port is not None:
             try:
-                destination_port = int(
-                    destination_port
-                )
-            except (
-                ValueError,
-                TypeError,
-            ):
+                destination_port = int(float(destination_port))
+            except (ValueError, TypeError):
                 destination_port = None
-
         else:
             destination_port = None
 
         # Protocol
+        raw_proto = row.get("Protocol")
+        if pd.isna(raw_proto) or raw_proto is None:
+            raw_proto = row.get("protocol")
 
-        protocol = protocol_name(
-            row.get("Protocol")
-        )
+        protocol = protocol_name(raw_proto)
+
 
         # Attack type
 
@@ -339,6 +494,19 @@ def sync_alerts(
             )
         )
 
+        # Source and Destination IPs
+        source_ip = row.get("Src_IP") or row.get("src_ip") or row.get("source_ip")
+        if pd.isna(source_ip) or source_ip is None:
+            source_ip = None
+        else:
+            source_ip = str(source_ip)
+
+        destination_ip = row.get("Dst_IP") or row.get("dst_ip") or row.get("destination_ip")
+        if pd.isna(destination_ip) or destination_ip is None:
+            destination_ip = None
+        else:
+            destination_ip = str(destination_ip)
+
         # Insert
 
         cursor.execute(
@@ -352,10 +520,12 @@ def sync_alerts(
                 destination_port,
                 protocol,
                 status,
+                source_ip,
+                destination_ip,
                 created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 alert_id,
@@ -366,6 +536,8 @@ def sync_alerts(
                 destination_port,
                 protocol,
                 "NEW",
+                source_ip,
+                destination_ip,
                 now,
                 now,
             ),
@@ -373,8 +545,32 @@ def sync_alerts(
 
         inserted += 1
 
+        # Track newly inserted attack alerts for incident correlation (skip BENIGN)
+        if attack_type.upper() != "BENIGN":
+            newly_inserted_attack_alerts.append({
+                "alert_id": alert_id,
+                "timestamp": timestamp or now,
+                "attack_type": attack_type,
+                "severity": severity,
+                "confidence": float(confidence),
+                "destination_port": destination_port,
+                "protocol": protocol,
+                "source_ip": source_ip,
+                "destination_ip": destination_ip,
+                "created_at": now,
+            })
+
     connection.commit()
     connection.close()
+
+    # Correlate newly inserted attack alerts into SOC Incidents
+    if newly_inserted_attack_alerts:
+        try:
+            from src.soc.incident_engine import IncidentEngine
+            for alert_dict in newly_inserted_attack_alerts:
+                IncidentEngine.correlate_alert(alert_dict)
+        except Exception:
+            pass
 
     return inserted
 

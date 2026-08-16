@@ -37,3 +37,22 @@ models/
 # OS
 .DS_Store
 Thumbs.db
+
+# Database & Logs
+*.db
+*.db.bak
+*.log
+
+# Local datasets and generated data
+data/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Runtime databases and backups
+*.db
+*.db.bak
+
+# Logs
+*.log
