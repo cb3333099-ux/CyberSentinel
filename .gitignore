@@ -53,6 +53,11 @@ __pycache__/
 # Runtime databases and backups
 *.db
 *.db.bak
+backups/
+
+# Environment and secrets
+.env
+.env.local
 
 # Logs
 *.log

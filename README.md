@@ -1,52 +1,62 @@
 # CyberSentinel — Big Data & AI-Driven SOC Telemetry Platform
 
-CyberSentinel is an enterprise-grade, Big Data and AI-driven Security Operations Center (SOC) telemetry and network intrusion detection platform. It processes high-speed network traffic, aggregates raw packets into bi-directional 5-tuple flows, applies two-stage Machine Learning (Random Forest) detection and classification, correlates alerts into actionable SOC incidents, enriches telemetry with local Threat Intelligence and MITRE ATT&CK Enterprise v19.0 mappings, and delivers real-time operational analytics and model performance monitoring.
+CyberSentinel is an enterprise-grade, Big Data and AI-driven Security Operations Center (SOC) telemetry, network intrusion detection, incident response, detection engineering workbench, and role-based access control platform. It processes high-speed network traffic, aggregates raw packets into bi-directional 5-tuple flows, applies two-stage Machine Learning (Random Forest) detection and classification, correlates alerts into actionable SOC incidents, enriches telemetry with local Threat Intelligence and MITRE ATT&CK Enterprise v19.0 mappings, delivers real-time operational analytics, and enforces strict role-based access control (RBAC) across all API endpoints and analyst workflows.
 
 ---
 
 ## Technical Architecture Diagram
 
 ```
-+-----------------------------------------------------------------------------------+
-|                            INPUT DATA SOURCES                                    |
-|   CSE-CIC-IDS2018 Dataset  |  PCAP Files  |  Passive Live Interface Capture (eth0)   |
-+-----------------------------------------------------------------------------------+
-                                         │
-                                         ▼
-+-----------------------------------------------------------------------------------+
-|                        FLOW INGESTION & FEATURE ENGINEERING                       |
-|        Bi-directional 5-Tuple Aggregation & Sliding Window Metric Calculation     |
-+-----------------------------------------------------------------------------------+
-                                         │
-                                         ▼
-+-----------------------------------------------------------------------------------+
-|                             MACHINE LEARNING ENGINE                               |
-|   Stage 1: Binary Attack Detection  ──➔  Stage 2: Multi-class Attack Classifier   |
-+-----------------------------------------------------------------------------------+
-                                         │
-                                         ▼
-+-----------------------------------------------------------------------------------+
-|                      DETECTION RULES & THREAT INTELLIGENCE                        |
-|   Behavioral Detection Rules (RULE-001..005)  |  Local Threat Indicator Store     |
-+-----------------------------------------------------------------------------------+
-                                         │
-                                         ▼
-+-----------------------------------------------------------------------------------+
-|                      MITRE ATT&CK ENTERPRISE V19.0 ENRICHMENT                     |
-|     Technique Mapping (T1110, T1498, T1071, T1190) & Rationale Association       |
-+-----------------------------------------------------------------------------------+
-                                         │
-                                         ▼
-+-----------------------------------------------------------------------------------+
-|                        SOC INCIDENT CORRELATION ENGINE                            |
-|       5-Minute Time Window Grouping & Explainable Risk Score (0-100 Clamped)      |
-+-----------------------------------------------------------------------------------+
-                                         │
-                                         ▼
-+-----------------------------------------------------------------------------------+
-|                   SOC ANALYTICS, MODEL MONITORING & DASHBOARD                     |
-|        PySpark Dataset Analysis  |  FastAPI REST API  |  Streamlit Workspace      |
-+-----------------------------------------------------------------------------------+
++---------------------------------------------------------------------------------------------------+
+|                                     INPUT DATA SOURCES                                            |
+|        CSE-CIC-IDS2018 Dataset   |   PCAP Files   |   Passive Live Interface Capture (eth0)       |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                               FLOW INGESTION & FEATURE ENGINEERING                                |
+|             Bi-directional 5-Tuple Aggregation & Sliding Window Metric Calculation                |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                                      MACHINE LEARNING ENGINE                                      |
+|            Stage 1: Binary Attack Detection  ──➔  Stage 2: Multi-class Attack Classifier          |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                               DETECTION RULES & THREAT INTELLIGENCE                               |
+|            Behavioral Detection Rules (RULE-001..005)   |   Local Threat Indicator Store          |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                               MITRE ATT&CK ENTERPRISE V19.0 ENRICHMENT                            |
+|              Technique Mapping (T1110, T1498, T1071, T1190) & Rationale Association               |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                                 SOC INCIDENT CORRELATION ENGINE                                   |
+|                5-Minute Time Window Grouping & Explainable Risk Score (0-100 Clamped)             |
++---------------------------------------------------------------------------------------------------+
+                                                  │
+                                                  ▼
++---------------------------------------------------------------------------------------------------+
+|                           ROLE-BASED ACCESS CONTROL & API GATEWAY                                 |
+|         FastAPI REST API  |  PBKDF2 Password Hashing  |  Bearer Session Tokens  |  Audit Log      |
+|                      RBAC Enforcement: Admin  |  Analyst  |  Read-only                            |
++---------------------------------------------------------------------------------------------------+
+                                 │                                                 │
+                                 ▼                                                 ▼
++--------------------------------------------------+ +----------------------------------------------+
+|             STREAMLIT ANALYST WORKSPACE          | |           RELIABLE PERSISTENCE LAYER         |
+|  - Real-time Alert & Incident Feeds              | |  - SQLite ACID SOC Telemetry Store           |
+|  - Investigation Notes, Evidence & Reports       | |  - Online Atomic Backups (sqlite3.backup)    |
+|  - Detection Workbench & Offline Sandbox         | |  - Pre-Restore Safety Snapshots              |
+|  - Role-Tailored Administration & Diagnostics    | |  - Integrity Checks (PRAGMA integrity_check) |
++--------------------------------------------------+ +----------------------------------------------+
 ```
 
 ---
@@ -58,9 +68,11 @@ CyberSentinel is an enterprise-grade, Big Data and AI-driven Security Operations
 - **Machine Learning**: Scikit-learn (Random Forest Stage 1 Detector & Stage 2 Classifier)
 - **Data Engineering**: Pandas `3.0.5`, NumPy `2.5.1`, PyArrow
 - **Packet Capture**: Scapy `2.7.0` (Linux `AF_PACKET` raw socket engine)
-- **REST API Backend**: FastAPI `0.141.1`, Uvicorn `0.52.1`
+- **REST API Backend**: FastAPI `0.141.1`, Uvicorn `0.52.1`, Starlette `0.46.1`
 - **Analyst Workspace**: Streamlit `1.61.1`, Plotly `6.9.0`
-- **Testing**: PyTest `9.1.1`
+- **Security & Cryptography**: PBKDF2-HMAC-SHA256 (100,000 iterations), Secrets CSPRNG tokens
+- **Persistence & Backups**: SQLite 3 with atomic online backup API (`sqlite3.Connection.backup`)
+- **Testing Suite**: PyTest `9.1.1` (113 automated unit, integration, and security tests)
 
 ---
 
@@ -111,119 +123,248 @@ CyberSentinel is trained and benchmarked on the benchmark **CSE-CIC-IDS2018 Clea
 - Offline Sandbox Preview: test draft rules and adjusted thresholds against bounded offline telemetry flows; provides match counts, match rates, and explanatory reasons with zero production state changes.
 - Change Audit History: persistent SQLite audit logging capturing all rule modifications, threshold adjustments, enable/disable transitions, analyst attribution, and timestamps.
 
+### 9. Production Readiness, Security & Role-Based Access Control (Phase 8)
+- **Centralized Configuration**: All operational parameters managed via `src/config.py` and `.env` template.
+- **Secure Password Hashing**: Passwords stored exclusively as PBKDF2-HMAC-SHA256 hashes with 100,000 iterations and 16-byte cryptographically secure per-user salts.
+- **Three-Tier Role-Based Access Control**:
+  - `admin`: User lifecycle management, database backup/recovery operations, system diagnostics, plus analyst permissions.
+  - `analyst`: Alert triaging, incident lifecycle management, investigation notes, evidence collection, recommendation review, detection rule authoring and threshold tuning.
+  - `read_only`: Inspection of permitted alerts, incidents, analytics, rules, reports, and threat intel without data modification. Direct API mutations return `403 Forbidden`.
+- **First-Run Administrator Bootstrap**: Zero default or hardcoded credentials. Administrators configure their initial account via environment variables or a one-time setup modal that permanently seals upon first creation.
+- **Security Audit Trail**: Dedicated `auth_audit_log` recording all logins, logouts, user management events, and backup operations without logging secrets or plaintext tokens.
+- **Safe Database Backup & Recovery**: Online, lock-free SQLite backups via `sqlite3.Connection.backup()`, pre-restoration integrity checks (`PRAGMA integrity_check`), deliberate confirmation token requirements (`CONFIRM_RESTORE`), and automatic safety pre-restore snapshots.
+- **System Health & Readiness Probes**: Comprehensive `/health` and `/ready` endpoints verifying database connectivity, ML model availability, and backup directory readiness without exposing secret keys.
+
 ---
 
-## Installation & Setup
+## Authentication & Role-Based Access Control (RBAC)
 
-On Windows, run the Spark-backed inference, network, and streaming tests from the project's WSL2 environment. Hadoop 3.5 local model reads require the Linux filesystem implementation; the native Windows Hadoop helper (`winutils.exe`) is not bundled with this repository.
+CyberSentinel enforces permissions **at the API layer**, ensuring that direct REST requests from unauthorized or read-only clients are rejected with HTTP `401 Unauthorized` or `403 Forbidden`.
 
-1. **Activate Environment**:
+### Role Permissions Matrix
+
+| Feature / Operation | Admin | Analyst | Read-only | Unauthenticated |
+| :--- | :---: | :---: | :---: | :---: |
+| **System Health & Readiness** (`/health`, `/ready`) | Yes | Yes | Yes | Yes |
+| **Auth Status & Login** (`/api/auth/*`) | Yes | Yes | Yes | Yes |
+| **First-Admin Bootstrap** (One-time only) | N/A | N/A | N/A | Yes (if 0 users) |
+| **View Alerts & Incidents** | Yes | Yes | Yes | No |
+| **Update Incident Status / Assign** | Yes | Yes | No | No |
+| **Add Notes & Evidence** | Yes | Yes | No | No |
+| **Review Recommendations** | Yes | Yes | No | No |
+| **Generate Incident Reports** (JSON/MD) | Yes | Yes | Yes | No |
+| **View Detection Rules & History** | Yes | Yes | Yes | No |
+| **Edit Rules & Adjust Thresholds** | Yes | Yes | No | No |
+| **Run Offline Rule Previews** | Yes | Yes | Yes | No |
+| **View SOC Analytics & Model Metrics** | Yes | Yes | Yes | No |
+| **User Management** (Create, Deactivate, Reset) | Yes | No | No | No |
+| **Create & Validate Database Backups** | Yes | No | No | No |
+| **Execute Database Restoration** | Yes | No | No | No |
+| **Inspect Security Audit Log** | Yes | No | No | No |
+
+---
+
+## Installation & Environment Setup
+
+On Windows, run CyberSentinel within WSL2 (Ubuntu) to leverage Linux native socket capture and the POSIX Hadoop filesystem for PySpark:
+
+1. **Clone the Repository & Navigate to Workspace**:
+   ```bash
+   cd /mnt/d/BDA/CyberSentinel
+   ```
+
+2. **Activate the Virtual Environment**:
    ```bash
    source /home/charay/cybersentinel-venv/bin/activate
    ```
 
-2. **Live Network Capture Privilege Setup (Optional for Live Interface Monitoring)**:
-   Grant Linux raw socket capability to the Python executable:
+3. **Configure Environment Variables**:
+   Copy the example environment file and configure secrets:
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` as needed:
+   ```ini
+   CYBERSENTINEL_AUTH_ENABLED=true
+   CYBERSENTINEL_SESSION_SECRET=generate-a-secure-random-key-here
+   CYBERSENTINEL_TOKEN_EXPIRE_MINUTES=480
+   CYBERSENTINEL_API_PORT=8000
+   CYBERSENTINEL_DASHBOARD_PORT=8501
+   ```
+
+4. **Bootstrap the First Administrator Account**:
+   You have two secure options to set up the initial admin:
+   - **Option A (Environment Variables)**: Set `CYBERSENTINEL_ADMIN_USERNAME` and `CYBERSENTINEL_ADMIN_PASSWORD` in your `.env` file before starting the API. CyberSentinel will automatically bootstrap the initial admin on startup.
+   - **Option B (First-Run Web Setup)**: Start the platform with an empty user database. Open the dashboard; CyberSentinel will detect zero existing accounts and present a secure **First-Run Administrator Setup** form. Once created, self-registration permanently locks.
+
+5. **Live Network Capture Privilege Setup (Optional)**:
+   To permit passive packet monitoring without running the dashboard as root:
    ```bash
    sudo setcap cap_net_raw,cap_net_admin+eip /usr/bin/python3.14
-   ```
-   Verify capability:
-   ```bash
    getcap /usr/bin/python3.14
    ```
-   To remove capability:
-   ```bash
-   sudo setcap -r /usr/bin/python3.14
-   ```
-   *(Note: Historical dataset analytics, PCAP replay, and normal dashboard operation do NOT require live packet capture capabilities.)*
-
-For isolated test execution, set `CYBERSENTINEL_SOC_DB_PATH` to a temporary SQLite file. The test suite does this automatically and never uses the analyst SOC database.
+   *(Note: Dataset replay, ML inference, and dashboard operations do not require raw socket capabilities.)*
 
 ---
 
-## Running the Platform
+## Running the Platform in WSL2
 
-1. **Start FastAPI Backend**:
-   ```bash
-   uvicorn src.api.main:app --host 0.0.0.0 --port 8000
-   ```
+Start the FastAPI backend and Streamlit dashboard in separate terminal windows:
 
-2. **Start Streamlit Dashboard**:
-   ```bash
-   streamlit run dashboard/app.py
-   ```
-
----
-
-## End-to-End 10-Step Safe Demo Sequence (5–10 Minutes)
-
-1. **STEP 1 — Overview**: Open dashboard to view real-time system metrics, active alerts, and architectural status.
-2. **STEP 2 — Historical Dataset Analytics**: Navigate to `SOC Analytics` -> View CSE-CIC-IDS2018 dataset scale (16.2M flows) and class distribution.
-3. **STEP 3 — Simulated Real-Time Streaming**: Navigate to `Replay / Dataset Telemetry` -> Start dataset flow streaming.
-4. **STEP 4 — Live Network Monitoring**: Navigate to `Real-Time Monitoring` -> Select interface `eth0` -> Click `START LIVE CAPTURE`. Observe passive packet capture without active network probing.
-5. **STEP 5 — Offline Attack Flow Evaluation**: Trigger a safe dataset replay sample flow containing an SSH-Bruteforce or DoS attack vector.
-6. **STEP 6 — SOC Alert Persistence**: Inspect generated alert under `Real-Time Monitoring` -> `Alert Feed`.
-7. **STEP 7 — Correlated SOC Incident**: Navigate to `Incidents` -> Select created incident in the Analyst Workspace queue.
-8. **STEP 8 — Threat Intelligence & MITRE ATT&CK**: Inspect the right panel for Threat Intel match, Behavioral Rule trigger, and MITRE ATT&CK `T1110` / `T1498` mapping rationale.
-9. **STEP 9 — SOC Analytics**: Navigate to `SOC Analytics` -> Switch time windows (`15m`, `1h`, `24h`, `7d`) -> View activity trends, top source/target entities, and MTTR.
-10. **STEP 10 — Model Performance & Monitoring**: Inspect Stage 1 & Stage 2 confidence distributions, mean confidence, and drift status indicators.
-
-## Phase 6 API Usage
-
-The existing FastAPI service exposes these incident case-management routes:
-
-- `POST/GET /api/incidents/{incident_id}/notes`
-- `POST/GET /api/incidents/{incident_id}/evidence`
-- `POST /api/incidents/{incident_id}/status` with an optional `resolution_summary`
-- `POST /api/incidents/{incident_id}/assign`
-- `GET /api/incidents/{incident_id}/recommendations`
-- `POST /api/incidents/{incident_id}/recommendations/{recommendation_id}/review`
-- `GET /api/incidents/{incident_id}/report?format=json|markdown`
-
-## Phase 7 Detection Engineering Workbench API Usage
-
-The FastAPI service exposes these detection engineering routes:
-
-- `GET /api/rules` — List all registered detection rules with thresholds, status, and MITRE mapping
-- `POST /api/rules` — Create a custom detection rule with allowlisted structured conditions
-- `GET /api/rules/{rule_id}` — Get detailed detection rule metadata
-- `PUT /api/rules/{rule_id}` — Update rule metadata, severity, thresholds, or correlation windows
-- `POST /api/rules/{rule_id}/status` — Enable or disable a detection rule (immediately toggles live engine evaluation)
-- `POST /api/rules/{rule_id}/duplicate` — Clone an existing rule with new ID and parameters
-- `GET /api/rules/{rule_id}/audit` & `GET /api/rules-audit` — Fetch audit history logs with analyst attribution
-- `POST /api/rules/preview` — Test rule logic against bounded offline candidate telemetry (isolated, zero state change)
-- `GET /api/rules/preview-samples` — Retrieve candidate offline flow telemetry samples for sandbox testing
-
-Run the focused Phase 7 and incident checks with the configured environment:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_phase7_detection_workbench.py tests/test_phase6_incidents.py -q
-```
-
----
-
-## Testing & Verification
-
-Run the full automated test suite containing all 101 unit and integration tests:
+### Terminal 1: Start FastAPI Backend
 ```bash
-python3 -m pytest tests/
+cd /mnt/d/BDA/CyberSentinel
+source /home/charay/cybersentinel-venv/bin/activate
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+```
+- API Base URL: `http://localhost:8000`
+- Interactive Swagger UI: `http://localhost:8000/docs`
+- ReDoc API Specification: `http://localhost:8000/redoc`
+- System Readiness Probe: `http://localhost:8000/ready`
+
+### Terminal 2: Start Streamlit Analyst Workspace
+```bash
+cd /mnt/d/BDA/CyberSentinel
+source /home/charay/cybersentinel-venv/bin/activate
+streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+```
+- Analyst Dashboard URL: `http://localhost:8501`
+
+---
+
+## Database Backup and Recovery Procedures
+
+CyberSentinel provides atomic, point-in-time SQLite backups and a guarded recovery subsystem to protect operational telemetry.
+
+### Backup Creation
+- **Via Admin UI**: Navigate to `Administration` -> `Backup & Recovery` -> Click **Create Immediate Backup**.
+- **Via API**:
+  ```bash
+  curl -X POST http://localhost:8000/api/admin/backups \
+    -H "Authorization: Bearer <ADMIN_TOKEN>" \
+    -H "Content-Type: application/json" \
+    -d '{"label": "pre-upgrade"}'
+  ```
+- Backups are stored in `data/backups/` using the format `soc_backup_<label>_<YYYYMMDD_HHMMSS>.db`.
+- SQLite's online backup API ensures zero disruption to concurrent reads or writes.
+
+### Backup Validation
+Before restoring any database file, CyberSentinel performs a three-stage validation:
+1. Verifies minimum file size and existence.
+2. Checks the 16-byte SQLite format 3 magic header bytes.
+3. Executes `PRAGMA integrity_check` on the candidate file.
+- **Via UI**: Click **Validate File** in the Backups table.
+- **Via API**:
+  ```bash
+  curl "http://localhost:8000/api/admin/backups/validate?backup_path=data/backups/soc_backup_pre-upgrade_20261012_100000.db" \
+    -H "Authorization: Bearer <ADMIN_TOKEN>"
+  ```
+
+### Safe Database Restoration
+Restoration includes two mandatory safety mechanisms:
+1. **Deliberate Confirmation**: The request must supply `confirmation="CONFIRM_RESTORE"`.
+2. **Pre-Restore Snapshot**: CyberSentinel automatically generates an emergency pre-restore snapshot (`soc_backup_prerestore_safety_*.db`) of the live database before replacing it, preventing accidental data loss.
+- **Via Admin UI**: Select the backup file -> Type `CONFIRM_RESTORE` -> Click **Execute Database Restore**.
+- **Via API**:
+  ```bash
+  curl -X POST http://localhost:8000/api/admin/backups/restore \
+    -H "Authorization: Bearer <ADMIN_TOKEN>" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "backup_path": "data/backups/soc_backup_pre-upgrade_20261012_100000.db",
+      "confirmation": "CONFIRM_RESTORE"
+    }'
+  ```
+
+---
+
+## Automated Testing & Verification
+
+Run the complete automated test suite (113 unit, integration, and security tests) in WSL2:
+
+```bash
+cd /mnt/d/BDA/CyberSentinel
+source /home/charay/cybersentinel-venv/bin/activate
+python -m pytest tests/ -v
 ```
 
-From Windows with WSL2:
-```powershell
-wsl bash -lc "cd /mnt/d/BDA/CyberSentinel && /home/charay/cybersentinel-venv/bin/python -m pytest tests -q"
+### Focused Security & RBAC Test Suite
+To run Phase 8 authentication, authorization, and backup verification:
+```bash
+python -m pytest tests/test_phase8_security.py -v
 ```
 
-Result:
+### Full Test Suite Execution Summary
 ```
-====================== 101 passed, 2 warnings in 38.82s ======================
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /mnt/d/BDA/CyberSentinel
+collected 113 items
+
+tests/test_analytics.py .........................                       [ 22%]
+tests/test_api.py ...........                                           [ 31%]
+tests/test_live_engine.py ..........                                    [ 40%]
+tests/test_phase5_threat_intel_mitre.py .............                   [ 52%]
+tests/test_phase6_incidents.py ...........                              [ 61%]
+tests/test_phase7_detection_workbench.py .............                  [ 73%]
+tests/test_phase8_security.py ............                              [ 84%]
+tests/test_pipeline.py ........                                         [ 91%]
+tests/test_scapy_engine.py ..........                                   [100%]
+
+======================== 113 passed, 2 warnings in 38.51s ========================
 ```
 
 ---
 
-## Demo State Reset Procedure
+## End-to-End Demonstration Workflow (11 Steps)
 
-To safely reset demo-generated alerts and incidents without losing database configuration, replay history, or threat intelligence indicators:
-```bash
-python3 src/utils/demo_reset.py --clear-demo-alerts
-```
+1. **STEP 1 — Bootstrap & Admin Login**: Open `http://localhost:8501`. Log in with your configured administrator credentials. Notice the active session badge, username, and role in the sidebar.
+2. **STEP 2 — User Management & RBAC Provisioning**: Navigate to `Administration` -> `User Management`. Provision an Analyst user (`analyst1`) and a Read-Only user (`auditor1`). Verify that passwords meet the minimum length policy.
+3. **STEP 3 — Read-Only Verification**: Log out and log in as `auditor1`. Observe that incident assignment buttons, status transitions, rule editors, and threshold sliders are disabled. Attempting direct API modifications returns `403 Forbidden`.
+4. **STEP 4 — Analyst Investigation Workspace**: Log out and log in as `analyst1`. Navigate to `Incidents`. Select an active incident, assign it to yourself, transition status to `IN_PROGRESS`, add a timestamped note, and attach evidence metadata.
+5. **STEP 5 — AI Recommendations & Review**: Open the **Contextual Response Recommendations** accordion. Review recommended actions (e.g., host isolation, firewall rules) and click **Mark Reviewed** with analyst comments.
+6. **STEP 6 — Case Report Export**: Download the comprehensive incident report in Markdown or JSON format containing the complete audit timeline, MITRE ATT&CK techniques, evidence, and notes.
+7. **STEP 7 — Detection Engineering Workbench**: Navigate to `Detection Workbench`. Inspect the live rule catalog. Tune an existing rule threshold (e.g., threshold count or correlation window), or draft a new rule in Rule Studio.
+8. **STEP 8 — Offline Sandbox Preview**: Run an offline rule preview against candidate telemetry samples. Inspect match rates and explanatory reasons with zero production state modification.
+9. **STEP 9 — Telemetry & Threat Intelligence**: Navigate to `Replay / Dataset Telemetry` to stream flows or inspect passive packet captures. Observe live alert correlation into MITRE ATT&CK `T1110` / `T1498` techniques.
+10. **STEP 10 — Database Backup & Validation**: Log back in as `admin`. Navigate to `Administration` -> `Backup & Recovery`. Create an immediate backup labeled `demo-snapshot`. Run the built-in integrity check to confirm `PRAGMA integrity_check` passes.
+11. **STEP 11 — Security Audit Trail**: Open `Security Audit Log` in the Administration tab. Verify that all login events, role verifications, and backup activities are chronologically recorded with zero password or token leaks.
+
+---
+
+## Production Release Checklist
+
+Before deploying CyberSentinel to a production or multi-user environment, verify each checklist item:
+
+### 1. Security Configuration
+- [ ] Ensure `CYBERSENTINEL_AUTH_ENABLED=true` in `.env`.
+- [ ] Replace `CYBERSENTINEL_SESSION_SECRET` with a 256-bit high-entropy secret (`openssl rand -hex 32`).
+- [ ] Ensure initial admin bootstrap credentials (`CYBERSENTINEL_ADMIN_PASSWORD`) are strong (>= 12 characters) and removed from plaintext files once created.
+- [ ] Restrict file permissions on `.env` (`chmod 600 .env`).
+- [ ] Ensure the database directory `data/` and backup directory `data/backups/` have restricted read/write permissions.
+
+### 2. Operational Reliability
+- [ ] Verify both `/health` and `/ready` endpoints return HTTP 200 and report all components as healthy.
+- [ ] Verify test suite passes completely with `python -m pytest -q`.
+- [ ] Confirm scheduled or automated backup scripts are configured with appropriate retention windows.
+- [ ] Verify pre-restoration backup snapshots are preserved.
+
+### 3. Network & Transport Security
+- [ ] Deploy a reverse proxy (e.g., NGINX, Caddy, or Traefik) in front of FastAPI (port 8000) and Streamlit (port 8501) with TLS/HTTPS certificates.
+- [ ] Configure reverse proxy rate limiting on `/api/auth/login` to prevent credential brute-forcing.
+- [ ] Grant Linux capabilities (`cap_net_raw`) only if passive interface monitoring is explicitly required on the host; do not run application servers as root.
+
+---
+
+## Known Limitations & Security Considerations
+
+1. **Single-Node SQLite Concurrency**:
+   - The platform uses SQLite for local simplicity and zero external database overhead. SQLite utilizes file-level locking during writes. For high-volume multi-analyst teams (> 50 concurrent active users), migrating the persistent store to PostgreSQL or MySQL is recommended.
+2. **In-Memory Session Invalidation**:
+   - Active bearer tokens are stored in the `user_sessions` SQLite table and cached in memory. In multi-instance or load-balanced topologies, a distributed session store (such as Redis or signed JWTs with distributed revocation lists) would be required.
+3. **Local Filesystem Backup Storage**:
+   - By default, database backups are stored on local storage (`data/backups/`). In production environments, backups should be replicated to off-site, immutable object storage (such as AWS S3 with Object Lock or GCP Cloud Storage).
+4. **Transport Layer Security (TLS)**:
+   - The Uvicorn and Streamlit dev servers run unencrypted HTTP by default. Production deployments require a reverse proxy terminating HTTPS/TLS to safeguard credentials and session tokens over the wire.
+5. **Passive Network Capture Privileges**:
+   - Live packet sniffing on Linux requires `cap_net_raw` privileges. The application must never be run as root; file capabilities (`setcap`) or PCAP replay should always be used instead.

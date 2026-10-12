@@ -16,8 +16,11 @@ import pandas as pd
 DEFAULT_ALERT_LIMIT = 10000
 MAX_ALERT_LIMIT = 10000
 
-_configured_db_path = os.environ.get("CYBERSENTINEL_SOC_DB_PATH")
-DB_PATH = Path(_configured_db_path) if _configured_db_path else Path("/home/charay/cybersentinel-data/soc/alerts.db")
+def get_db_path() -> Path:
+    _configured_db_path = os.environ.get("CYBERSENTINEL_SOC_DB_PATH")
+    return Path(_configured_db_path) if _configured_db_path else Path("/home/charay/cybersentinel-data/soc/alerts.db")
+
+DB_PATH = get_db_path()
 DB_DIR = DB_PATH.parent
 
 
@@ -29,14 +32,14 @@ def get_connection():
     """
     Create and return a SQLite connection.
     """
-
-    DB_DIR.mkdir(
+    active_path = get_db_path()
+    active_path.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
     connection = sqlite3.connect(
-        DB_PATH,
+        active_path,
         timeout=60.0,
         check_same_thread=False,
     )
@@ -473,6 +476,67 @@ def initialize_database():
                     """,
                     r_seed,
                 )
+
+            # Phase 8 — Authentication, Users, Sessions & Auth Audit
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_login_at TEXT
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    last_active_at TEXT NOT NULL
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS auth_audit_log (
+                    audit_id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    details TEXT,
+                    timestamp TEXT NOT NULL
+                )
+                """
+            )
+
+            # Optional environment-configured initial admin bootstrap
+            admin_user_env = os.environ.get("CYBERSENTINEL_ADMIN_USERNAME", "").strip().lower()
+            admin_pass_env = os.environ.get("CYBERSENTINEL_ADMIN_PASSWORD", "").strip()
+            if admin_user_env and len(admin_pass_env) >= 8:
+                cursor.execute("SELECT count(*) FROM users WHERE role = 'admin' AND is_active = 1")
+                if cursor.fetchone()[0] == 0:
+                    from src.soc.auth_service import hash_password
+                    pwd_h = hash_password(admin_pass_env)
+                    u_id = f"USR-{hashlib.sha256(admin_user_env.encode()).hexdigest()[:12].upper()}"
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO users (user_id, username, password_hash, role, display_name, is_active, created_at, updated_at)
+                        VALUES (?, ?, ?, 'admin', 'System Administrator', 1, ?, ?)
+                        """,
+                        (u_id, admin_user_env, pwd_h, now_iso, now_iso),
+                    )
 
             connection.commit()
             connection.close()

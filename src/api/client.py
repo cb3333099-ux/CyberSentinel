@@ -1,3 +1,5 @@
+import os
+from typing import Any, Dict, List, Optional
 import requests
 
 
@@ -5,9 +7,29 @@ import requests
 # CONFIGURATION
 # ============================================================
 
-API_BASE_URL = "http://localhost:8000"
+API_HOST = os.environ.get("CYBERSENTINEL_API_HOST", "localhost")
+if API_HOST == "0.0.0.0":
+    API_HOST = "localhost"
+API_PORT = int(os.environ.get("CYBERSENTINEL_API_PORT", 8000))
+API_BASE_URL = os.environ.get("CYBERSENTINEL_API_BASE_URL", f"http://{API_HOST}:{API_PORT}")
 DEFAULT_ALERT_LIMIT = 10000
 MAX_ALERT_LIMIT = 10000
+
+_session_token: Optional[str] = None
+
+
+def set_auth_token(token: Optional[str]) -> None:
+    global _session_token
+    _session_token = token
+
+
+def get_auth_token() -> Optional[str]:
+    return _session_token
+
+
+def clear_auth_token() -> None:
+    global _session_token
+    _session_token = None
 
 
 # ============================================================
@@ -26,6 +48,9 @@ def _request(
     """
 
     url = f"{API_BASE_URL}{endpoint}"
+    headers = {}
+    if _session_token:
+        headers["Authorization"] = f"Bearer {_session_token}"
 
     try:
 
@@ -34,6 +59,7 @@ def _request(
             url=url,
             params=params,
             json=json,
+            headers=headers,
             timeout=timeout,
         )
 
@@ -909,8 +935,100 @@ def get_analytics_dataset():
     return _request("GET", "/api/analytics/dataset")
 
 
+# ============================================================
+# PHASE 8 — SYSTEM READINESS, AUTHENTICATION & ACCESS CONTROL
+# ============================================================
+
+def get_readiness():
+    return _request("GET", "/ready")
 
 
+def get_auth_status():
+    return _request("GET", "/api/auth/status")
+
+
+def setup_initial_admin(username: str, password: str, display_name: Optional[str] = None):
+    payload = {"username": username, "password": password}
+    if display_name:
+        payload["display_name"] = display_name
+    res = _request("POST", "/api/auth/setup-admin", json=payload)
+    if "session" in res and "session_token" in res["session"]:
+        set_auth_token(res["session"]["session_token"])
+    return res
+
+
+def login(username: str, password: str):
+    res = _request("POST", "/api/auth/login", json={"username": username, "password": password})
+    if "session_token" in res:
+        set_auth_token(res["session_token"])
+    return res
+
+
+def logout():
+    try:
+        res = _request("POST", "/api/auth/logout")
+    finally:
+        clear_auth_token()
+    return res
+
+
+def get_current_user_profile():
+    return _request("GET", "/api/auth/me")
+
+
+def get_auth_audit_logs(limit: int = 100):
+    return _request("GET", "/api/auth/audit", params={"limit": limit})
+
+
+# ============================================================
+# PHASE 8 — USER MANAGEMENT (ADMIN ONLY)
+# ============================================================
+
+def list_users():
+    return _request("GET", "/api/users")
+
+
+def create_user(username: str, password: str, role: str = "analyst", display_name: Optional[str] = None):
+    payload = {"username": username, "password": password, "role": role}
+    if display_name:
+        payload["display_name"] = display_name
+    return _request("POST", "/api/users", json=payload)
+
+
+def deactivate_user(user_id: str):
+    return _request("POST", f"/api/users/{user_id}/deactivate")
+
+
+def reactivate_user(user_id: str):
+    return _request("POST", f"/api/users/{user_id}/reactivate")
+
+
+def reset_user_password(user_id: str, new_password: str):
+    return _request("POST", f"/api/users/{user_id}/reset-password", json={"new_password": new_password})
+
+
+# ============================================================
+# PHASE 8 — DATABASE BACKUP & RECOVERY (ADMIN ONLY)
+# ============================================================
+
+def create_backup(label: Optional[str] = None):
+    params = {"label": label} if label else None
+    return _request("POST", "/api/admin/backup", params=params)
+
+
+def list_backups():
+    return _request("GET", "/api/admin/backups")
+
+
+def validate_backup(backup_path: str):
+    return _request("POST", "/api/admin/backup/validate", json={"backup_path": backup_path})
+
+
+def restore_backup(backup_path: str, confirmation: str):
+    return _request("POST", "/api/admin/backup/restore", json={"backup_path": backup_path, "confirmation": confirmation})
+
+
+if __name__ == "__main__":
     health = get_health()
 
     print("\nAPI Health:")

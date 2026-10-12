@@ -1,10 +1,12 @@
-# src/api/main.py
-
+import json
+import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.soc.alert_store import (
@@ -18,6 +20,8 @@ from src.soc.alert_store import (
 from src.streaming.stream_manager import stream_manager
 
 
+logger = logging.getLogger("cybersentinel.api")
+
 
 # ============================================================
 # CONFIGURATION
@@ -27,6 +31,70 @@ APP_NAME = "CyberSentinel SOC API"
 APP_VERSION = "1.0.0"
 DEFAULT_ALERT_LIMIT = 10000
 MAX_ALERT_LIMIT = 10000
+
+
+# ============================================================
+# AUTHENTICATION & RBAC DEPENDENCY (PHASE 8)
+# ============================================================
+
+def get_current_user(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token"),
+) -> Dict[str, Any]:
+    from src.config import is_auth_enabled
+    from src.soc.auth_service import validate_session
+
+    if hasattr(request.state, "user") and request.state.user:
+        return request.state.user
+
+    raw_token = authorization or x_session_token
+    token = None
+    if raw_token:
+        if raw_token.startswith("Bearer "):
+            token = raw_token[7:].strip()
+        else:
+            token = raw_token.strip()
+
+    # If auth is explicitly disabled (e.g. in test suites isolating logic)
+    if not is_auth_enabled():
+        if token:
+            u = validate_session(token)
+            if u:
+                return u
+        return {
+            "user_id": "USR-TEST-ADMIN",
+            "username": "test_admin",
+            "role": "admin",
+            "display_name": "Test Administrator",
+        }
+
+    # Auth is enabled (production / security test suite)
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Provide a valid Bearer session token.",
+        )
+
+    user = validate_session(token)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session token. Please authenticate.",
+        )
+    return user
+
+
+def require_role(*roles: str):
+    def role_checker(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+        user_role = user.get("role", "read_only")
+        if user_role not in roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Permission denied: Action requires role in {roles}, but current user '{user.get('username')}' has role '{user_role}'.",
+            )
+        return user
+    return role_checker
 
 
 # ============================================================
@@ -44,9 +112,91 @@ app = FastAPI(
 )
 
 
+@app.middleware("http")
+async def authenticate_request(request: Request, call_next):
+    from src.config import is_auth_enabled
+    from src.soc.auth_service import validate_session
+
+    if not is_auth_enabled():
+        return await call_next(request)
+
+    path = request.url.path.rstrip("/")
+    if not path:
+        path = "/"
+
+    public_paths = {
+        "/",
+        "/health",
+        "/ready",
+        "/docs",
+        "/openapi.json",
+        "/redoc",
+        "/api/auth/status",
+        "/api/auth/setup-admin",
+        "/api/auth/login",
+    }
+    if path in public_paths or path.startswith("/docs") or path.startswith("/openapi.json"):
+        return await call_next(request)
+
+    raw_token = request.headers.get("authorization") or request.headers.get("x-session-token")
+    token = None
+    if raw_token:
+        if raw_token.startswith("Bearer "):
+            token = raw_token[7:].strip()
+        else:
+            token = raw_token.strip()
+
+    if not token:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required. Provide a valid Bearer session token."},
+        )
+
+    user = validate_session(token)
+    if not user:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid or expired session token. Please authenticate."},
+        )
+
+    request.state.user = user
+    return await call_next(request)
+
+
 # ============================================================
 # REQUEST MODELS
 # ============================================================
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class SetupAdminRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=8, max_length=128)
+    display_name: Optional[str] = Field(default=None, max_length=100)
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=32)
+    password: str = Field(min_length=8, max_length=128)
+    role: str = Field(default="analyst")
+    display_name: Optional[str] = Field(default=None, max_length=100)
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class BackupValidateRequest(BaseModel):
+    backup_path: str = Field(min_length=1)
+
+
+class BackupRestoreRequest(BaseModel):
+    backup_path: str = Field(min_length=1)
+    confirmation: str = Field(min_length=1)
+
 
 class StatusUpdate(BaseModel):
     status: str
@@ -84,7 +234,200 @@ def health():
     return {
         "status": "healthy",
         "service": "cybersentinel-soc-api",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+# ============================================================
+# READINESS & COMPONENT HEALTH PROBES (PHASE 8)
+# ============================================================
+
+@app.get("/ready")
+def readiness():
+    from src.config import get_system_config_summary
+    from src.soc.alert_store import get_connection
+
+    db_ready = False
+    try:
+        conn = get_connection()
+        conn.execute("SELECT 1 FROM alerts LIMIT 1")
+        conn.close()
+        db_ready = True
+    except Exception:
+        db_ready = False
+
+    cfg = get_system_config_summary()
+    ml_ready = bool(cfg.get("stage1_model_exists") and cfg.get("stage2_model_exists"))
+
+    status = "ready" if db_ready else "not_ready"
+    status_code = 200 if db_ready else 503
+    return Response(
+        content=json.dumps({
+            "status": status,
+            "database_ready": db_ready,
+            "ml_engine_ready": ml_ready,
+            "detection_rules_ready": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "config": cfg,
+        }),
+        status_code=status_code,
+        media_type="application/json",
+    )
+
+
+# ============================================================
+# AUTHENTICATION & ACCESS CONTROL ENDPOINTS (PHASE 8)
+# ============================================================
+
+@app.get("/api/auth/status")
+def auth_status_endpoint():
+    from src.config import is_auth_enabled
+    from src.soc.auth_service import count_admins
+    return {
+        "auth_enabled": is_auth_enabled(),
+        "admin_configured": count_admins() > 0,
+    }
+
+
+@app.post("/api/auth/setup-admin")
+def setup_admin_endpoint(req: SetupAdminRequest):
+    from src.soc.auth_service import setup_initial_admin, create_session
+    try:
+        user = setup_initial_admin(req.username, req.password, req.display_name)
+        session = create_session(user)
+        return {
+            "message": "Initial administrator created successfully",
+            "session": session,
+        }
+    except ValueError as err:
+        raise HTTPException(status_code=403, detail=str(err))
+
+
+@app.post("/api/auth/login")
+def login_endpoint(req: LoginRequest):
+    from src.soc.auth_service import authenticate_user, create_session
+    user, err = authenticate_user(req.username, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail=err or "Invalid username or password")
+    session = create_session(user)
+    return session
+
+
+@app.post("/api/auth/logout")
+def logout_endpoint(authorization: Optional[str] = Header(None, alias="Authorization")):
+    from src.soc.auth_service import invalidate_session
+    if authorization:
+        invalidate_session(authorization)
+    return {"message": "Logged out successfully"}
+
+
+@app.get("/api/auth/me")
+def me_endpoint(user: Dict[str, Any] = Depends(get_current_user)):
+    return {"user": user}
+
+
+@app.get("/api/auth/audit")
+def auth_audit_endpoint(limit: int = 100, user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.auth_service import get_auth_audit_logs
+    logs = get_auth_audit_logs(limit=limit)
+    return {"count": len(logs), "logs": logs}
+
+
+# ============================================================
+# USER MANAGEMENT ENDPOINTS (ADMIN ONLY) (PHASE 8)
+# ============================================================
+
+@app.get("/api/users")
+def list_users_endpoint(user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.auth_service import list_users
+    users = list_users()
+    return {"count": len(users), "users": users}
+
+
+@app.post("/api/users")
+def create_user_endpoint(req: CreateUserRequest, user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.auth_service import create_user
+    try:
+        created = create_user(
+            username=req.username,
+            password=req.password,
+            role=req.role,
+            display_name=req.display_name,
+            actor=user.get("username", "ADMIN"),
+        )
+        return {"message": "User created successfully", "user": created}
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
+@app.post("/api/users/{user_id}/deactivate")
+def deactivate_user_endpoint(user_id: str, user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.auth_service import deactivate_user
+    try:
+        updated = deactivate_user(user_id, actor=user.get("username", "ADMIN"))
+        return {"message": "User deactivated successfully", "user": updated}
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
+@app.post("/api/users/{user_id}/reactivate")
+def reactivate_user_endpoint(user_id: str, user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.auth_service import reactivate_user
+    try:
+        updated = reactivate_user(user_id, actor=user.get("username", "ADMIN"))
+        return {"message": "User reactivated successfully", "user": updated}
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
+@app.post("/api/users/{user_id}/reset-password")
+def reset_password_endpoint(user_id: str, req: ResetPasswordRequest, user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.auth_service import reset_password
+    try:
+        updated = reset_password(user_id, req.new_password, actor=user.get("username", "ADMIN"))
+        return {"message": "Password reset successfully", "user": updated}
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
+# ============================================================
+# DATABASE BACKUP & RECOVERY (ADMIN ONLY) (PHASE 8)
+# ============================================================
+
+@app.post("/api/admin/backup")
+def create_backup_endpoint(user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.db_backup import create_backup
+    try:
+        res = create_backup()
+        return res
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Backup creation failed: {exc}")
+
+
+@app.get("/api/admin/backups")
+def list_backups_endpoint(user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.db_backup import list_backups
+    backups = list_backups()
+    return {"count": len(backups), "backups": backups}
+
+
+@app.post("/api/admin/backup/validate")
+def validate_backup_endpoint(req: BackupValidateRequest, user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.db_backup import validate_backup
+    is_valid, msg = validate_backup(req.backup_path)
+    return {"is_valid": is_valid, "message": msg}
+
+
+@app.post("/api/admin/backup/restore")
+def restore_backup_endpoint(req: BackupRestoreRequest, user: Dict[str, Any] = Depends(require_role("admin"))):
+    from src.soc.db_backup import restore_backup
+    try:
+        res = restore_backup(req.backup_path, req.confirmation, actor=user.get("username", "ADMIN"))
+        return res
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ============================================================
@@ -245,6 +588,7 @@ def single_alert(
 def change_alert_status(
     alert_id: str,
     payload: StatusUpdate,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
 ):
 
     status = payload.status.upper()
@@ -558,6 +902,7 @@ def start_stream_endpoint(
     continuous: bool = False,
     seed: Optional[int] = 42,
     target_attack_ratio: float = 0.30,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
 ):
     b_size = req.batch_size if req and req.batch_size is not None else batch_size
     d_lay = req.delay if req and req.delay is not None else delay
@@ -580,7 +925,7 @@ def start_stream_endpoint(
 
 
 @app.post("/api/stream/stop")
-def stop_stream_endpoint():
+def stop_stream_endpoint(user: Dict[str, Any] = Depends(require_role("admin", "analyst"))):
     return stream_manager.stop()
 
 
@@ -611,7 +956,7 @@ def get_network_status():
 
 
 @app.post("/api/network/start")
-def start_network_stream_endpoint(req: NetworkStartRequest):
+def start_network_stream_endpoint(req: NetworkStartRequest, user: Dict[str, Any] = Depends(require_role("admin", "analyst"))):
     if req.source_type == "pcap":
         if not req.pcap_path:
             raise HTTPException(status_code=400, detail="pcap_path is required for PCAP mode")
@@ -636,7 +981,7 @@ def start_network_stream_endpoint(req: NetworkStartRequest):
 
 
 @app.post("/api/network/stop")
-def stop_network_stream_endpoint():
+def stop_network_stream_endpoint(user: Dict[str, Any] = Depends(require_role("admin", "analyst"))):
     return network_stream_manager.stop_stream()
 
 
@@ -648,12 +993,12 @@ def get_network_flows():
 
 
 @app.post("/api/stream/pause")
-def pause_stream_endpoint():
+def pause_stream_endpoint(user: Dict[str, Any] = Depends(require_role("admin", "analyst"))):
     return stream_manager.pause()
 
 
 @app.post("/api/stream/resume")
-def resume_stream_endpoint():
+def resume_stream_endpoint(user: Dict[str, Any] = Depends(require_role("admin", "analyst"))):
     return stream_manager.resume()
 
 
@@ -764,13 +1109,18 @@ def get_incident_endpoint(incident_id: str):
 
 
 @app.post("/api/incidents/{incident_id}/status")
-def update_incident_status_endpoint(incident_id: str, req: IncidentStatusUpdate):
+def update_incident_status_endpoint(
+    incident_id: str,
+    req: IncidentStatusUpdate,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.incident_engine import update_incident_status
+    actor = req.actor if (req.actor and req.actor != "ANALYST") else user.get("username", "ANALYST")
     try:
         inc = update_incident_status(
             incident_id=incident_id,
             new_status=req.status,
-            actor=req.actor or "ANALYST",
+            actor=actor,
             resolution_summary=req.resolution_summary,
         )
         if not inc:
@@ -794,10 +1144,15 @@ def get_incident_alerts_endpoint(incident_id: str):
 
 
 @app.post("/api/incidents/{incident_id}/assign")
-def assign_incident_endpoint(incident_id: str, req: IncidentAssignRequest):
+def assign_incident_endpoint(
+    incident_id: str,
+    req: IncidentAssignRequest,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.incident_engine import assign_incident
+    actor = req.actor if (req.actor and req.actor != "ANALYST") else user.get("username", "ANALYST")
     try:
-        inc = assign_incident(incident_id=incident_id, assigned_to=req.assigned_to, actor=req.actor or "ANALYST")
+        inc = assign_incident(incident_id=incident_id, assigned_to=req.assigned_to, actor=actor)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
     if not inc:
@@ -828,10 +1183,15 @@ def get_incident_notes_endpoint(incident_id: str):
 
 
 @app.post("/api/incidents/{incident_id}/notes")
-def add_incident_note_endpoint(incident_id: str, req: IncidentNoteRequest):
+def add_incident_note_endpoint(
+    incident_id: str,
+    req: IncidentNoteRequest,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.incident_engine import add_incident_note
+    author = req.author if req.author else user.get("username", "ANALYST")
     try:
-        note = add_incident_note(incident_id, req.content, req.author)
+        note = add_incident_note(incident_id, req.content, author)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
     if not note:
@@ -849,7 +1209,11 @@ def get_incident_evidence_endpoint(incident_id: str):
 
 
 @app.post("/api/incidents/{incident_id}/evidence")
-def add_incident_evidence_endpoint(incident_id: str, req: IncidentEvidenceRequest):
+def add_incident_evidence_endpoint(
+    incident_id: str,
+    req: IncidentEvidenceRequest,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.incident_engine import add_incident_evidence
     try:
         evidence = add_incident_evidence(
@@ -876,14 +1240,20 @@ def get_incident_recommendations_endpoint(incident_id: str):
 
 
 @app.post("/api/incidents/{incident_id}/recommendations/{recommendation_id}/review")
-def review_incident_recommendation_endpoint(incident_id: str, recommendation_id: str, req: RecommendationReviewRequest):
+def review_incident_recommendation_endpoint(
+    incident_id: str,
+    recommendation_id: str,
+    req: RecommendationReviewRequest,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.incident_engine import review_response_recommendation
+    reviewer = req.reviewer if req.reviewer else user.get("username", "ANALYST")
     try:
         recommendation = review_response_recommendation(
             incident_id,
             recommendation_id,
             req.decision,
-            req.reviewer,
+            reviewer,
             req.comment,
         )
     except ValueError as err:
@@ -938,7 +1308,10 @@ def get_indicator_by_value_endpoint(value: str):
 from fastapi import Request
 
 @app.post("/api/intel/indicators")
-async def add_indicator_endpoint(request: Request):
+async def add_indicator_endpoint(
+    request: Request,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.intel.indicator_store import IndicatorStore
     req = await request.json()
     try:
@@ -952,7 +1325,10 @@ async def add_indicator_endpoint(request: Request):
 
 
 @app.delete("/api/intel/indicators/{indicator_id}")
-def remove_indicator_endpoint(indicator_id: str):
+def remove_indicator_endpoint(
+    indicator_id: str,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.intel.indicator_store import IndicatorStore
     success = IndicatorStore.remove_indicator(indicator_id)
     if not success:
@@ -1017,11 +1393,15 @@ def list_all_rules_audit_endpoint(limit: int = 100):
 
 
 @app.post("/api/rules")
-def create_rule_endpoint(req: RuleCreateRequest):
+def create_rule_endpoint(
+    req: RuleCreateRequest,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.detection_rules import create_rule
     data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    analyst = req.actor if (req.actor and req.actor != "ANALYST") else user.get("username", "ANALYST")
     try:
-        rule = create_rule(data, analyst=req.actor or "ANALYST")
+        rule = create_rule(data, analyst=analyst)
         return {"message": "Rule created", "rule": rule}
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
@@ -1039,12 +1419,17 @@ def get_rule_endpoint(rule_id: str):
 
 
 @app.put("/api/rules/{rule_id}")
-def update_rule_endpoint(rule_id: str, req: RuleUpdateRequest):
+def update_rule_endpoint(
+    rule_id: str,
+    req: RuleUpdateRequest,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.detection_rules import update_rule
     data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
     updates = {k: v for k, v in data.items() if v is not None and k != "actor"}
+    analyst = req.actor if (req.actor and req.actor != "ANALYST") else user.get("username", "ANALYST")
     try:
-        updated = update_rule(rule_id, updates, analyst=req.actor or "ANALYST")
+        updated = update_rule(rule_id, updates, analyst=analyst)
         if not updated:
             raise HTTPException(status_code=404, detail=f"Detection rule '{rule_id}' not found")
         return {"message": "Rule updated", "rule": updated}
@@ -1053,19 +1438,29 @@ def update_rule_endpoint(rule_id: str, req: RuleUpdateRequest):
 
 
 @app.post("/api/rules/{rule_id}/status")
-def set_rule_status_endpoint(rule_id: str, req: RuleStatusRequest):
+def set_rule_status_endpoint(
+    rule_id: str,
+    req: RuleStatusRequest,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.detection_rules import set_rule_status
-    rule = set_rule_status(rule_id, req.enabled, analyst=req.actor or "ANALYST")
+    analyst = req.actor if (req.actor and req.actor != "ANALYST") else user.get("username", "ANALYST")
+    rule = set_rule_status(rule_id, req.enabled, analyst=analyst)
     if not rule:
         raise HTTPException(status_code=404, detail=f"Detection rule '{rule_id}' not found")
     return {"message": "Rule status updated", "rule": rule}
 
 
 @app.post("/api/rules/{rule_id}/duplicate")
-def duplicate_rule_endpoint(rule_id: str, req: RuleDuplicateRequest):
+def duplicate_rule_endpoint(
+    rule_id: str,
+    req: RuleDuplicateRequest,
+    user: Dict[str, Any] = Depends(require_role("admin", "analyst")),
+):
     from src.soc.detection_rules import duplicate_rule
+    analyst = req.actor if (req.actor and req.actor != "ANALYST") else user.get("username", "ANALYST")
     try:
-        duplicated = duplicate_rule(rule_id, req.new_rule_id, req.new_rule_name, analyst=req.actor or "ANALYST")
+        duplicated = duplicate_rule(rule_id, req.new_rule_id, req.new_rule_name, analyst=analyst)
         if not duplicated:
             raise HTTPException(status_code=404, detail=f"Source detection rule '{rule_id}' not found")
         return {"message": "Rule duplicated", "rule": duplicated}

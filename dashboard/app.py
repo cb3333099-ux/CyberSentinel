@@ -80,6 +80,25 @@ from src.api.client import (
     get_analytics_incidents,
     get_analytics_model,
     get_analytics_dataset,
+    get_readiness,
+    get_auth_status,
+    setup_initial_admin,
+    login,
+    logout,
+    get_current_user_profile,
+    get_auth_audit_logs,
+    list_users,
+    create_user,
+    deactivate_user,
+    reactivate_user,
+    reset_user_password,
+    create_backup,
+    list_backups,
+    validate_backup,
+    restore_backup,
+    set_auth_token,
+    get_auth_token,
+    clear_auth_token,
 )
 
 
@@ -481,6 +500,97 @@ except Exception as exc:
 
 
 # ============================================================
+# AUTHENTICATION & ACCESS CONTROL (PHASE 8)
+# ============================================================
+
+try:
+    auth_status = get_auth_status()
+    auth_enabled = bool(auth_status.get("auth_enabled", False))
+    admin_configured = bool(auth_status.get("admin_configured", False))
+except Exception:
+    auth_enabled = False
+    admin_configured = True
+
+if "auth_token" in st.session_state and st.session_state["auth_token"]:
+    set_auth_token(st.session_state["auth_token"])
+
+if auth_enabled:
+    if "auth_token" not in st.session_state or not st.session_state.get("auth_token"):
+        st.markdown(
+            """
+            <div style="max-width:520px; margin: 60px auto; background-color:#151922; border:1px solid #2a303a; border-radius:6px; padding:28px;">
+                <div style="font-size:16px; font-weight:700; color:#f3f4f6; letter-spacing:0.5px;">🛡️ CYBERSENTINEL SOC GATEWAY</div>
+                <div style="font-size:11px; color:#9ca3af; margin-top:4px; margin-bottom:20px;">SECURITY OPERATIONS CENTER ACCESS CONTROL</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        login_col1, login_col2, login_col3 = st.columns([1, 2, 1])
+        with login_col2:
+            if not admin_configured:
+                st.info("⚠️ INITIAL SETUP: No administrator account configured. Please create the initial SOC Administrator account.")
+                with st.form("setup_admin_form"):
+                    admin_user = st.text_input("Administrator Username", value="admin")
+                    admin_disp = st.text_input("Display Name", value="Security Lead")
+                    admin_pass1 = st.text_input("Password (min 8 chars)", type="password")
+                    admin_pass2 = st.text_input("Confirm Password", type="password")
+                    submit_setup = st.form_submit_button("INITIALIZE SOC PLATFORM", use_container_width=True)
+                    if submit_setup:
+                        if admin_pass1 != admin_pass2:
+                            st.error("Passwords do not match.")
+                        elif len(admin_pass1) < 8:
+                            st.error("Password must be at least 8 characters long.")
+                        else:
+                            try:
+                                res = setup_initial_admin(admin_user.strip(), admin_pass1, admin_disp.strip() or None)
+                                session_info = res.get("session", {})
+                                st.session_state["auth_token"] = session_info.get("session_token")
+                                st.session_state["current_user"] = {
+                                    "user_id": session_info.get("user_id"),
+                                    "username": session_info.get("username"),
+                                    "role": session_info.get("role", "admin"),
+                                    "display_name": session_info.get("display_name"),
+                                }
+                                st.success("SOC Platform initialized successfully!")
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(f"Setup failed: {exc}")
+            else:
+                with st.form("login_form"):
+                    st.markdown("**OPERATIONAL LOGIN**")
+                    login_user = st.text_input("Username")
+                    login_pass = st.text_input("Password", type="password")
+                    submit_login = st.form_submit_button("AUTHENTICATE & ENTER SOC", use_container_width=True)
+                    if submit_login:
+                        try:
+                            res = login(login_user.strip(), login_pass)
+                            st.session_state["auth_token"] = res.get("session_token")
+                            st.session_state["current_user"] = {
+                                "user_id": res.get("user_id"),
+                                "username": res.get("username"),
+                                "role": res.get("role"),
+                                "display_name": res.get("display_name"),
+                            }
+                            st.success(f"Authenticated as {res.get('username')}")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Authentication failed: {exc}")
+
+        st.stop()
+
+# User is authenticated or auth is disabled
+current_user = st.session_state.get(
+    "current_user",
+    {"username": "analyst", "role": "admin" if not auth_enabled else "read_only", "display_name": "SOC Analyst"},
+)
+user_role = current_user.get("role", "admin" if not auth_enabled else "read_only")
+is_admin = user_role == "admin"
+is_analyst = user_role == "analyst"
+is_read_only = user_role == "read_only"
+
+
+# ============================================================
 # SIDEBAR NAVIGATION & SYSTEM STATUS
 # ============================================================
 
@@ -488,20 +598,47 @@ with st.sidebar:
     st.markdown('<div style="font-size:13px; font-weight:700; color:#f3f4f6;">CYBERSENTINEL</div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:10px; color:#9ca3af; margin-bottom:8px;">SOC PLATFORM</div>', unsafe_allow_html=True)
 
+    if auth_enabled:
+        role_colors = {"admin": "#818cf8", "analyst": "#38bdf8", "read_only": "#9ca3af"}
+        badge_color = role_colors.get(user_role, "#9ca3af")
+        user_name = current_user.get("display_name") or current_user.get("username", "User")
+        st.markdown(
+            f"""
+            <div style="background-color:#1c222d; border:1px solid #2a303a; border-radius:4px; padding:6px 10px; margin-bottom:8px;">
+                <div style="font-size:11px; font-weight:700; color:#f3f4f6;">{user_name}</div>
+                <div style="font-size:9px; font-weight:700; color:{badge_color}; text-transform:uppercase;">ROLE: {user_role.upper()}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("LOGOUT", use_container_width=True, key="btn_logout_sidebar"):
+            try:
+                logout()
+            except Exception:
+                pass
+            st.session_state.pop("auth_token", None)
+            st.session_state.pop("current_user", None)
+            st.rerun()
+        st.divider()
+
+    nav_options = [
+        "Overview",
+        "Real-Time Monitoring",
+        "Incidents",
+        "Threat Intelligence",
+        "Detection Engineering",
+        "SOC Analytics",
+        "Detection Analytics",
+        "Model Intelligence",
+        "System Status",
+        "Replay / Dataset Telemetry",
+    ]
+    if is_admin:
+        nav_options.append("Administration")
+
     current_view = st.radio(
         "Navigation",
-        [
-            "Overview",
-            "Real-Time Monitoring",
-            "Incidents",
-            "Threat Intelligence",
-            "Detection Engineering",
-            "SOC Analytics",
-            "Detection Analytics",
-            "Model Intelligence",
-            "System Status",
-            "Replay / Dataset Telemetry",
-        ],
+        nav_options,
         label_visibility="collapsed",
     )
 
@@ -1266,28 +1403,28 @@ elif current_view == "Incidents":
             )
             a1, a2, a3, a4 = st.columns(4)
             with a1:
-                if st.button("INVESTIGATE", use_container_width=True, key=f"btn_inv_{inc_id}"):
+                if st.button("INVESTIGATE", use_container_width=True, key=f"btn_inv_{inc_id}", disabled=is_read_only):
                     try:
                         update_incident_status(inc_id, "INVESTIGATING")
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Error: {exc}")
             with a2:
-                if st.button("ESCALATE", use_container_width=True, key=f"btn_esc_{inc_id}"):
+                if st.button("ESCALATE", use_container_width=True, key=f"btn_esc_{inc_id}", disabled=is_read_only):
                     try:
                         update_incident_status(inc_id, "ESCALATED")
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Error: {exc}")
             with a3:
-                if st.button("RESOLVE", use_container_width=True, key=f"btn_res_{inc_id}"):
+                if st.button("RESOLVE", use_container_width=True, key=f"btn_res_{inc_id}", disabled=is_read_only):
                     try:
                         update_incident_status(inc_id, "RESOLVED", resolution_summary=resolution_input or None)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Error: {exc}")
             with a4:
-                if st.button("REOPEN", use_container_width=True, key=f"btn_reop_{inc_id}"):
+                if st.button("REOPEN", use_container_width=True, key=f"btn_reop_{inc_id}", disabled=is_read_only):
                     try:
                         update_incident_status(inc_id, "REOPEN")
                         st.rerun()
@@ -1297,10 +1434,10 @@ elif current_view == "Incidents":
             # Assign Analyst Toolbar
             as1, as2 = st.columns([3, 1])
             with as1:
-                assignee_input = st.text_input("Assign Analyst", value=inc_assigned if inc_assigned != "Unassigned" else "Analyst-1", key=f"assign_input_{inc_id}")
+                assignee_input = st.text_input("Assign Analyst", value=inc_assigned if inc_assigned != "Unassigned" else "Analyst-1", key=f"assign_input_{inc_id}", disabled=is_read_only)
             with as2:
                 st.markdown('<div style="height:27px;"></div>', unsafe_allow_html=True)
-                if st.button("ASSIGN", use_container_width=True, key=f"btn_assign_{inc_id}"):
+                if st.button("ASSIGN", use_container_width=True, key=f"btn_assign_{inc_id}", disabled=is_read_only):
                     try:
                         assign_incident(inc_id, assignee_input)
                         st.rerun()
@@ -1437,7 +1574,7 @@ elif current_view == "Incidents":
                     note_author = st.text_input("Analyst", value="ANALYST", key=f"note_author_{inc_id}")
                 with note_button_col:
                     st.markdown('<div style="height:27px;"></div>', unsafe_allow_html=True)
-                    if st.button("ADD", key=f"note_add_{inc_id}"):
+                    if st.button("ADD", key=f"note_add_{inc_id}", disabled=is_read_only):
                         add_incident_note(inc_id, note_text, note_author)
                         st.rerun()
             except Exception as exc:
@@ -1464,7 +1601,7 @@ elif current_view == "Incidents":
                 with evidence_source:
                     evidence_origin = st.text_input("Source", key=f"evidence_source_{inc_id}")
                 evidence_description = st.text_input("Evidence description", key=f"evidence_description_{inc_id}")
-                if st.button("REGISTER EVIDENCE", key=f"evidence_add_{inc_id}"):
+                if st.button("REGISTER EVIDENCE", key=f"evidence_add_{inc_id}", disabled=is_read_only):
                     add_incident_evidence(inc_id, evidence_kind, evidence_description, evidence_origin)
                     st.rerun()
             except Exception as exc:
@@ -1481,11 +1618,11 @@ elif current_view == "Incidents":
                             st.caption(recommendation["reason"] + " Recommendations are advisory; no external action is automated.")
                             rec_a, rec_r = st.columns(2)
                             with rec_a:
-                                if st.button("APPROVE", key=f"rec_approve_{recommendation['recommendation_id']}"):
+                                if st.button("APPROVE", key=f"rec_approve_{recommendation['recommendation_id']}", disabled=is_read_only):
                                     review_incident_recommendation(inc_id, recommendation["recommendation_id"], "APPROVED")
                                     st.rerun()
                             with rec_r:
-                                if st.button("REJECT", key=f"rec_reject_{recommendation['recommendation_id']}"):
+                                if st.button("REJECT", key=f"rec_reject_{recommendation['recommendation_id']}", disabled=is_read_only):
                                     review_incident_recommendation(inc_id, recommendation["recommendation_id"], "REJECTED")
                                     st.rerun()
                 else:
@@ -1691,8 +1828,8 @@ elif current_view == "Detection Engineering":
                     # Toggle Status Button
                     toggle_label = "DISABLE RULE" if is_enabled else "ENABLE RULE"
                     btn_type = "secondary" if is_enabled else "primary"
-                    analyst_toggle = st.text_input("Analyst Attribution", value="ANALYST", key=f"analyst_toggle_{selected_rule_id}")
-                    if st.button(toggle_label, key=f"btn_toggle_{selected_rule_id}", type=btn_type):
+                    analyst_toggle = st.text_input("Analyst Attribution", value="ANALYST", key=f"analyst_toggle_{selected_rule_id}", disabled=is_read_only)
+                    if st.button(toggle_label, key=f"btn_toggle_{selected_rule_id}", type=btn_type, disabled=is_read_only):
                         try:
                             set_rule_status(selected_rule_id, not is_enabled, actor=analyst_toggle)
                             st.success(f"Rule '{selected_rule_id}' is now {'ENABLED' if not is_enabled else 'DISABLED'}.")
@@ -1712,6 +1849,7 @@ elif current_view == "Detection Engineering":
                         value=curr_threshold,
                         step=1.0,
                         key=f"tune_thresh_{selected_rule_id}",
+                        disabled=is_read_only,
                     )
                     new_window = st.number_input(
                         "Correlation Window (Seconds)",
@@ -1720,8 +1858,9 @@ elif current_view == "Detection Engineering":
                         value=curr_window,
                         step=30,
                         key=f"tune_win_{selected_rule_id}",
+                        disabled=is_read_only,
                     )
-                    if st.button("UPDATE THRESHOLD & WINDOW", key=f"btn_tune_{selected_rule_id}"):
+                    if st.button("UPDATE THRESHOLD & WINDOW", key=f"btn_tune_{selected_rule_id}", disabled=is_read_only):
                         try:
                             update_rule(
                                 selected_rule_id,
@@ -1782,7 +1921,7 @@ elif current_view == "Detection Engineering":
             cr_tech = st.selectbox("MITRE ATT&CK Technique Mapping", tech_choices, index=3 if len(tech_choices) > 3 else 0, key="cr_rule_tech")
             cr_analyst = st.text_input("Author Analyst", value="ANALYST", key="cr_analyst")
 
-            if st.button("CREATE RULE", type="primary", key="btn_create_rule"):
+            if st.button("CREATE RULE", type="primary", key="btn_create_rule", disabled=is_read_only):
                 try:
                     tech_id_val = cr_tech.split(" - ")[0] if cr_tech != "NONE" else None
                     new_rule_data = {
@@ -1824,7 +1963,7 @@ elif current_view == "Detection Engineering":
                         ed_thresh = st.number_input("Threshold Value", min_value=1.0, max_value=5000.0, value=float(target_r.get("threshold_value", 1.0)), key="ed_thresh")
 
                     ed_analyst = st.text_input("Analyst", value="ANALYST", key="ed_analyst")
-                    if st.button("SAVE CHANGES", type="primary", key="btn_save_edit"):
+                    if st.button("SAVE CHANGES", type="primary", key="btn_save_edit", disabled=is_read_only):
                         try:
                             update_rule(
                                 edit_id,
@@ -1851,7 +1990,7 @@ elif current_view == "Detection Engineering":
                 new_name = st.text_input("New Rule Name", value=f"Copy of {dup_sel.split(' — ')[1]}", key="dup_new_name")
                 dup_analyst = st.text_input("Analyst", value="ANALYST", key="dup_analyst")
 
-                if st.button("DUPLICATE RULE", type="primary", key="btn_exec_duplicate"):
+                if st.button("DUPLICATE RULE", type="primary", key="btn_exec_duplicate", disabled=is_read_only):
                     try:
                         duplicated = duplicate_rule(src_id, new_id.strip().upper(), new_name.strip(), actor=dup_analyst)
                         st.success(f"Rule duplicated successfully as '{duplicated.get('rule_id')}'.")
@@ -2406,6 +2545,218 @@ elif current_view == "Replay / Dataset Telemetry":
             st.info("No recorded replay runs in SQLite replay_history yet.")
     except Exception as exc:
         st.warning(f"Could not load replay history: {exc}")
+
+
+# ============================================================
+# VIEW: ADMINISTRATION (ADMIN ONLY — PHASE 8)
+# ============================================================
+
+elif current_view == "Administration" and is_admin:
+    st.markdown('<div class="soc-section-header">🛡️ SOC ADMINISTRATION & OPERATIONAL CONTROL</div>', unsafe_allow_html=True)
+
+    tab_users, tab_backups, tab_diagnostics = st.tabs([
+        "USER MANAGEMENT & RBAC",
+        "DATABASE BACKUP & RECOVERY",
+        "SYSTEM DIAGNOSTICS & TELEMETRY",
+    ])
+
+    with tab_users:
+        st.markdown('<div class="soc-section-header">USER ACCOUNTS & ACCESS ROLES</div>', unsafe_allow_html=True)
+        try:
+            users_res = list_users()
+            user_list = users_res.get("users", [])
+            if user_list:
+                df_users = pd.DataFrame(user_list)
+                st.dataframe(
+                    df_users[["user_id", "username", "role", "display_name", "is_active", "created_at", "last_login"]].rename(columns={
+                        "user_id": "USER ID",
+                        "username": "USERNAME",
+                        "role": "ROLE",
+                        "display_name": "DISPLAY NAME",
+                        "is_active": "ACTIVE",
+                        "created_at": "CREATED AT",
+                        "last_login": "LAST LOGIN",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No users registered.")
+        except Exception as exc:
+            st.error(f"Failed to fetch users: {exc}")
+            user_list = []
+
+        col_new_u, col_mod_u = st.columns(2)
+        with col_new_u:
+            with st.expander("Create New Operational User", expanded=False):
+                with st.form("create_user_form"):
+                    nu_username = st.text_input("Username (3-32 chars)")
+                    nu_display = st.text_input("Display Name")
+                    nu_role = st.selectbox("Role", ["analyst", "read_only", "admin"])
+                    nu_password = st.text_input("Temporary Password (min 8 chars)", type="password")
+                    nu_submit = st.form_submit_button("CREATE USER", use_container_width=True)
+                    if nu_submit:
+                        try:
+                            create_user(nu_username.strip(), nu_password, role=nu_role, display_name=nu_display.strip() or None)
+                            st.success(f"User '{nu_username}' created with role '{nu_role}'.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Failed to create user: {exc}")
+
+        with col_mod_u:
+            with st.expander("Account Status & Password Reset", expanded=False):
+                if user_list:
+                    usernames = [u["username"] for u in user_list if u.get("username") != current_user.get("username")]
+                    if usernames:
+                        target_username = st.selectbox("Select Target User", usernames, key="select_target_user")
+                        target_user = next((u for u in user_list if u["username"] == target_username), None)
+                        if target_user:
+                            t_active = target_user.get("is_active", True)
+                            c_btn1, c_btn2 = st.columns(2)
+                            with c_btn1:
+                                if t_active:
+                                    if st.button("DEACTIVATE ACCOUNT", key=f"btn_deact_{target_user['user_id']}"):
+                                        try:
+                                            deactivate_user(target_user["user_id"])
+                                            st.success(f"User '{target_username}' deactivated.")
+                                            st.rerun()
+                                        except Exception as exc:
+                                            st.error(f"Error: {exc}")
+                                else:
+                                    if st.button("REACTIVATE ACCOUNT", key=f"btn_react_{target_user['user_id']}"):
+                                        try:
+                                            reactivate_user(target_user["user_id"])
+                                            st.success(f"User '{target_username}' reactivated.")
+                                            st.rerun()
+                                        except Exception as exc:
+                                            st.error(f"Error: {exc}")
+                            with c_btn2:
+                                reset_pass = st.text_input("New Password", type="password", key=f"rp_{target_user['user_id']}")
+                                if st.button("RESET PASSWORD", key=f"btn_rp_{target_user['user_id']}"):
+                                    try:
+                                        reset_user_password(target_user["user_id"], reset_pass)
+                                        st.success(f"Password reset for '{target_username}'.")
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(f"Error: {exc}")
+                    else:
+                        st.info("No other user accounts available to modify.")
+                else:
+                    st.info("No users available.")
+
+    with tab_backups:
+        st.markdown('<div class="soc-section-header">SQLITE TRANSACTIONAL BACKUP & SAFE RESTORATION</div>', unsafe_allow_html=True)
+        st.caption("Point-in-time SQLite online backups safely capture current alert and incident state without locking. Restoration requires explicit 'CONFIRM_RESTORE' confirmation and automatically takes a pre-restore safety snapshot before applying.")
+
+        b_c1, b_c2 = st.columns([1, 1])
+        with b_c1:
+            st.markdown("**Create Online Backup**")
+            backup_label = st.text_input("Backup Label (Optional)", value="", placeholder="e.g. pre-incident-drill")
+            if st.button("CREATE BACKUP NOW", key="btn_create_backup", type="primary"):
+                try:
+                    res_b = create_backup(label=backup_label.strip() or None)
+                    st.success(f"Backup created: {res_b.get('backup_file')} ({res_b.get('size_bytes', 0)/1024:.1f} KB)")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Backup failed: {exc}")
+
+        with b_c2:
+            st.markdown("**Validate Existing Backup**")
+            try:
+                b_list_res = list_backups()
+                available_backups = b_list_res.get("backups", [])
+            except Exception:
+                available_backups = []
+
+            if available_backups:
+                val_options = [b["backup_file"] for b in available_backups]
+                selected_val_b = st.selectbox("Select Backup to Validate", val_options, key="select_val_b")
+                selected_val_obj = next((b for b in available_backups if b["backup_file"] == selected_val_b), None)
+                if selected_val_obj:
+                    if st.button("VERIFY INTEGRITY (PRAGMA CHECK)", key="btn_val_backup"):
+                        try:
+                            val_res = validate_backup(selected_val_obj["full_path"])
+                            if val_res.get("is_valid"):
+                                st.success(f"✓ Backup Verified: {val_res.get('message')}")
+                            else:
+                                st.error(f"✗ Backup Corrupt / Invalid: {val_res.get('message')}")
+                        except Exception as exc:
+                            st.error(f"Validation failed: {exc}")
+            else:
+                st.info("No backups exist to validate.")
+
+        st.markdown('<div class="soc-section-header">AVAILABLE BACKUP ARCHIVES</div>', unsafe_allow_html=True)
+        if available_backups:
+            df_backups = pd.DataFrame(available_backups)
+            df_backups["SIZE (KB)"] = df_backups["size_bytes"].apply(lambda sz: f"{sz/1024:.1f} KB")
+            st.dataframe(
+                df_backups[["backup_file", "SIZE (KB)", "created_at", "full_path"]].rename(columns={
+                    "backup_file": "ARCHIVE FILE",
+                    "created_at": "TIMESTAMP",
+                    "full_path": "PATH ON DISK",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No backups currently stored in backup directory.")
+
+        with st.expander("⚠️ Database Restoration (High Impact)", expanded=False):
+            st.warning("Restoration replaces the active SQLite database with the selected snapshot. A safety copy of the current live database is created automatically prior to restoration.")
+            if available_backups:
+                restore_options = [b["backup_file"] for b in available_backups]
+                target_restore_file = st.selectbox("Select Target Backup to Restore", restore_options, key="select_restore_b")
+                target_restore_obj = next((b for b in available_backups if b["backup_file"] == target_restore_file), None)
+                confirm_str = st.text_input("Type 'CONFIRM_RESTORE' to enable restoration", key="confirm_restore_text")
+                if st.button("EXECUTE DATABASE RESTORE", key="btn_exec_restore", type="secondary", disabled=(confirm_str != "CONFIRM_RESTORE")):
+                    try:
+                        rest_res = restore_backup(target_restore_obj["full_path"], confirm_str)
+                        st.success(f"Restoration completed: {rest_res.get('message')}")
+                        st.info(f"Safety snapshot saved to: {rest_res.get('safety_snapshot')}")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Restoration failed: {exc}")
+            else:
+                st.info("No backups available to restore.")
+
+    with tab_diagnostics:
+        st.markdown('<div class="soc-section-header">SYSTEM READINESS & SUBSYSTEM DIAGNOSTICS</div>', unsafe_allow_html=True)
+        try:
+            ready_res = get_readiness()
+            r_c1, r_c2, r_c3 = st.columns(3)
+            with r_c1:
+                st.metric("DATABASE STATUS", "ONLINE" if ready_res.get("database_ready") else "OFFLINE")
+            with r_c2:
+                st.metric("ML ENGINE STATUS", "MODELS LOADED" if ready_res.get("ml_engine_ready") else "FALLBACK")
+            with r_c3:
+                st.metric("DETECTION ENGINE", "RULES ACTIVE" if ready_res.get("detection_rules_ready") else "INACTIVE")
+
+            st.markdown("**Configuration Telemetry**")
+            cfg = ready_res.get("config", {})
+            st.json(cfg)
+        except Exception as exc:
+            st.error(f"Readiness check failed: {exc}")
+
+        st.markdown('<div class="soc-section-header">AUTHENTICATION & SECURITY AUDIT LOGS</div>', unsafe_allow_html=True)
+        try:
+            audit_logs = get_auth_audit_logs(limit=50)
+            if audit_logs:
+                df_audit = pd.DataFrame(audit_logs)
+                st.dataframe(
+                    df_audit[["audit_id", "event_type", "username", "actor", "timestamp"]].rename(columns={
+                        "audit_id": "AUDIT ID",
+                        "event_type": "EVENT",
+                        "username": "TARGET USER",
+                        "actor": "ACTOR",
+                        "timestamp": "TIMESTAMP",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("No security audit logs recorded yet.")
+        except Exception as exc:
+            st.warning(f"Could not load security audit logs: {exc}")
 
 
 # ============================================================
