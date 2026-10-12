@@ -4,7 +4,7 @@ from typing import Optional
 
 import pandas as pd
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from src.soc.alert_store import (
@@ -664,11 +664,30 @@ def resume_stream_endpoint():
 class IncidentStatusUpdate(BaseModel):
     status: str
     actor: Optional[str] = "ANALYST"
+    resolution_summary: Optional[str] = Field(default=None, max_length=5000)
 
 
 class IncidentAssignRequest(BaseModel):
-    assigned_to: str
+    assigned_to: str = Field(min_length=1, max_length=200)
     actor: Optional[str] = "ANALYST"
+
+
+class IncidentNoteRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=10000)
+    author: str = Field(default="ANALYST", min_length=1, max_length=200)
+
+
+class IncidentEvidenceRequest(BaseModel):
+    evidence_type: str = Field(min_length=1, max_length=100)
+    description: str = Field(min_length=1, max_length=10000)
+    source: str = Field(min_length=1, max_length=500)
+    collected_at: Optional[str] = None
+
+
+class RecommendationReviewRequest(BaseModel):
+    decision: str = Field(min_length=1, max_length=20)
+    reviewer: str = Field(default="ANALYST", min_length=1, max_length=200)
+    comment: Optional[str] = Field(default=None, max_length=5000)
 
 
 @app.get("/api/incidents")
@@ -700,7 +719,12 @@ def get_incident_endpoint(incident_id: str):
 def update_incident_status_endpoint(incident_id: str, req: IncidentStatusUpdate):
     from src.soc.incident_engine import update_incident_status
     try:
-        inc = update_incident_status(incident_id=incident_id, new_status=req.status, actor=req.actor or "ANALYST")
+        inc = update_incident_status(
+            incident_id=incident_id,
+            new_status=req.status,
+            actor=req.actor or "ANALYST",
+            resolution_summary=req.resolution_summary,
+        )
         if not inc:
             raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
         return {
@@ -724,7 +748,10 @@ def get_incident_alerts_endpoint(incident_id: str):
 @app.post("/api/incidents/{incident_id}/assign")
 def assign_incident_endpoint(incident_id: str, req: IncidentAssignRequest):
     from src.soc.incident_engine import assign_incident
-    inc = assign_incident(incident_id=incident_id, assigned_to=req.assigned_to, actor=req.actor or "ANALYST")
+    try:
+        inc = assign_incident(incident_id=incident_id, assigned_to=req.assigned_to, actor=req.actor or "ANALYST")
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
     if not inc:
         raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
     return {
@@ -741,6 +768,98 @@ def get_incident_timeline_endpoint(incident_id: str):
         "count": len(events),
         "timeline": events,
     }
+
+
+@app.get("/api/incidents/{incident_id}/notes")
+def get_incident_notes_endpoint(incident_id: str):
+    from src.soc.incident_engine import get_incident, get_incident_notes
+    if not get_incident(incident_id):
+        raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
+    notes = get_incident_notes(incident_id)
+    return {"count": len(notes), "notes": notes}
+
+
+@app.post("/api/incidents/{incident_id}/notes")
+def add_incident_note_endpoint(incident_id: str, req: IncidentNoteRequest):
+    from src.soc.incident_engine import add_incident_note
+    try:
+        note = add_incident_note(incident_id, req.content, req.author)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    if not note:
+        raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
+    return {"message": "Investigation note added", "note": note}
+
+
+@app.get("/api/incidents/{incident_id}/evidence")
+def get_incident_evidence_endpoint(incident_id: str):
+    from src.soc.incident_engine import get_incident, get_incident_evidence_list
+    if not get_incident(incident_id):
+        raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
+    evidence = get_incident_evidence_list(incident_id)
+    return {"count": len(evidence), "evidence": evidence}
+
+
+@app.post("/api/incidents/{incident_id}/evidence")
+def add_incident_evidence_endpoint(incident_id: str, req: IncidentEvidenceRequest):
+    from src.soc.incident_engine import add_incident_evidence
+    try:
+        evidence = add_incident_evidence(
+            incident_id,
+            req.evidence_type,
+            req.description,
+            req.source,
+            req.collected_at,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    if not evidence:
+        raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
+    return {"message": "Evidence registered", "evidence": evidence}
+
+
+@app.get("/api/incidents/{incident_id}/recommendations")
+def get_incident_recommendations_endpoint(incident_id: str):
+    from src.soc.incident_engine import get_response_recommendations
+    recommendations = get_response_recommendations(incident_id)
+    if recommendations is None:
+        raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
+    return {"count": len(recommendations), "recommendations": recommendations}
+
+
+@app.post("/api/incidents/{incident_id}/recommendations/{recommendation_id}/review")
+def review_incident_recommendation_endpoint(incident_id: str, recommendation_id: str, req: RecommendationReviewRequest):
+    from src.soc.incident_engine import review_response_recommendation
+    try:
+        recommendation = review_response_recommendation(
+            incident_id,
+            recommendation_id,
+            req.decision,
+            req.reviewer,
+            req.comment,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    if not recommendation:
+        raise HTTPException(status_code=404, detail="Incident or recommendation not found")
+    return {"recommendation": recommendation}
+
+
+@app.get("/api/incidents/{incident_id}/report")
+def get_incident_report_endpoint(incident_id: str, format: str = "json"):
+    from src.soc.incident_engine import get_incident_report, render_incident_report_markdown
+    report = get_incident_report(incident_id)
+    if not report:
+        raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
+    if format.lower() == "markdown":
+        return Response(
+            content=render_incident_report_markdown(report),
+            media_type="text/markdown",
+            headers={"Content-Disposition": f"attachment; filename={incident_id}.md"},
+        )
+    if format.lower() != "json":
+        raise HTTPException(status_code=400, detail="format must be 'json' or 'markdown'")
+    return report
 
 
 # ============================================================

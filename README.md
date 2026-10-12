@@ -98,9 +98,18 @@ CyberSentinel is trained and benchmarked on the benchmark **CSE-CIC-IDS2018 Clea
 - Operational SQL analytics for time windows (`15m`, `1h`, `24h`, `7d`, `all`).
 - Stage 1 & Stage 2 confidence distributions, percentiles (`p25`–`p99`), low-confidence count (< 0.60), and distribution shift indicators.
 
+### 7. SOC Incident Response & Case Management (Phase 6)
+- Timestamped investigation notes with analyst attribution and chronological timeline events.
+- Validated incident assignment, lifecycle transitions, resolution summaries, and reassignment audit history.
+- Evidence metadata registration for type, description, source, collection timestamp, and incident association. Evidence is metadata-only; uploaded files are not executed or stored by the dashboard.
+- Contextual, reviewable response recommendations using incident severity, related alerts, attack types, and MITRE ATT&CK mappings. Recommendations never perform external response actions.
+- JSON and Markdown incident reports containing metadata, alerts, notes, evidence, timeline, MITRE mapping, recommendations, and resolution details.
+
 ---
 
 ## Installation & Setup
+
+On Windows, run the Spark-backed inference, network, and streaming tests from the project's WSL2 environment. Hadoop 3.5 local model reads require the Linux filesystem implementation; the native Windows Hadoop helper (`winutils.exe`) is not bundled with this repository.
 
 1. **Activate Environment**:
    ```bash
@@ -121,6 +130,8 @@ CyberSentinel is trained and benchmarked on the benchmark **CSE-CIC-IDS2018 Clea
    sudo setcap -r /usr/bin/python3.14
    ```
    *(Note: Historical dataset analytics, PCAP replay, and normal dashboard operation do NOT require live packet capture capabilities.)*
+
+For isolated test execution, set `CYBERSENTINEL_SOC_DB_PATH` to a temporary SQLite file. The test suite does this automatically and never uses the analyst SOC database.
 
 ---
 
@@ -151,13 +162,38 @@ CyberSentinel is trained and benchmarked on the benchmark **CSE-CIC-IDS2018 Clea
 9. **STEP 9 — SOC Analytics**: Navigate to `SOC Analytics` -> Switch time windows (`15m`, `1h`, `24h`, `7d`) -> View activity trends, top source/target entities, and MTTR.
 10. **STEP 10 — Model Performance & Monitoring**: Inspect Stage 1 & Stage 2 confidence distributions, mean confidence, and drift status indicators.
 
+## Phase 6 API Usage
+
+The existing FastAPI service exposes these incident case-management routes:
+
+- `POST/GET /api/incidents/{incident_id}/notes`
+- `POST/GET /api/incidents/{incident_id}/evidence`
+- `POST /api/incidents/{incident_id}/status` with an optional `resolution_summary`
+- `POST /api/incidents/{incident_id}/assign`
+- `GET /api/incidents/{incident_id}/recommendations`
+- `POST /api/incidents/{incident_id}/recommendations/{recommendation_id}/review`
+- `GET /api/incidents/{incident_id}/report?format=json|markdown`
+
+Run the focused Phase 6 and existing incident checks with the configured environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_phase6_incidents.py tests/test_incidents.py -q
+```
+
+Start the API and dashboard as usual, then use the `Incidents` workspace to add notes, register evidence metadata, review recommendations, and download a Markdown report.
+
 ---
 
 ## Testing & Verification
 
-Run the full automated test suite containing all 88 unit and integration tests:
+Run the full automated test suite containing all 93 unit and integration tests:
 ```bash
 python3 -m pytest tests/
+```
+
+From Windows with WSL2:
+```powershell
+wsl bash -lc "cd /mnt/d/BDA/CyberSentinel && /home/charay/cybersentinel-venv/bin/python -m pytest tests -q"
 ```
 
 Result:

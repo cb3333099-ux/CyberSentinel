@@ -479,7 +479,12 @@ def get_incident(incident_id: str) -> Optional[Dict[str, Any]]:
     return inc
 
 
-def update_incident_status(incident_id: str, new_status: str, actor: str = "ANALYST") -> Optional[Dict[str, Any]]:
+def update_incident_status(
+    incident_id: str,
+    new_status: str,
+    actor: str = "ANALYST",
+    resolution_summary: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Update incident status (NEW, INVESTIGATING, ESCALATED, RESOLVED, REOPEN) and record timeline event.
     """
@@ -487,6 +492,11 @@ def update_incident_status(incident_id: str, new_status: str, actor: str = "ANAL
     valid_statuses = {"NEW", "INVESTIGATING", "ESCALATED", "RESOLVED", "REOPEN"}
     if status_upper not in valid_statuses:
         raise ValueError(f"Invalid incident status '{new_status}'. Allowed: {sorted(valid_statuses)}")
+
+    if not str(actor or "").strip():
+        raise ValueError("Actor is required")
+    if resolution_summary is not None and len(resolution_summary.strip()) > 5000:
+        raise ValueError("Resolution summary must be 5000 characters or fewer")
 
     initialize_database()
     conn = get_connection()
@@ -502,10 +512,35 @@ def update_incident_status(incident_id: str, new_status: str, actor: str = "ANAL
     now_iso = datetime.now(timezone.utc).isoformat()
     target_status = "NEW" if status_upper == "REOPEN" else status_upper
 
-    cursor.execute(
-        "UPDATE incidents SET status = ?, updated_at = ? WHERE incident_id = ?",
-        (target_status, now_iso, incident_id),
-    )
+    allowed_transitions = {
+        "NEW": {"NEW", "INVESTIGATING", "ESCALATED"},
+        "INVESTIGATING": {"INVESTIGATING", "ESCALATED", "RESOLVED"},
+        "ESCALATED": {"ESCALATED", "INVESTIGATING", "RESOLVED"},
+        "RESOLVED": {"RESOLVED", "NEW"},
+    }
+    if target_status not in allowed_transitions.get(old_status, set()):
+        conn.close()
+        raise ValueError(f"Invalid incident transition from '{old_status}' to '{target_status}'")
+
+    if target_status == "RESOLVED" and resolution_summary is not None and not resolution_summary.strip():
+        raise ValueError("Resolution summary cannot be empty when provided")
+
+    resolution_values = (resolution_summary.strip() if resolution_summary else None, now_iso)
+    if target_status == "RESOLVED":
+        cursor.execute(
+            "UPDATE incidents SET status = ?, updated_at = ?, resolution_summary = COALESCE(?, resolution_summary), resolved_at = ? WHERE incident_id = ?",
+            (target_status, now_iso, resolution_values[0], resolution_values[1], incident_id),
+        )
+    elif old_status == "RESOLVED" and target_status == "NEW":
+        cursor.execute(
+            "UPDATE incidents SET status = ?, updated_at = ?, resolution_summary = NULL, resolved_at = NULL WHERE incident_id = ?",
+            (target_status, now_iso, incident_id),
+        )
+    else:
+        cursor.execute(
+            "UPDATE incidents SET status = ?, updated_at = ? WHERE incident_id = ?",
+            (target_status, now_iso, incident_id),
+        )
 
     event_id = f"EVT-{hashlib.md5(f'{incident_id}{status_upper}{now_iso}'.encode()).hexdigest()[:10]}"
     cursor.execute(
@@ -533,10 +568,25 @@ def assign_incident(incident_id: str, assigned_to: str, actor: str = "ANALYST") 
     """
     Assign an incident to an analyst and record timeline event.
     """
+    assigned_to = str(assigned_to or "").strip()
+    actor = str(actor or "").strip()
+    if not assigned_to:
+        raise ValueError("Assigned analyst is required")
+    if len(assigned_to) > 200:
+        raise ValueError("Assigned analyst must be 200 characters or fewer")
+    if not actor:
+        raise ValueError("Actor is required")
+
     initialize_database()
     conn = get_connection()
     cursor = conn.cursor()
 
+    cursor.execute("SELECT assigned_to FROM incidents WHERE incident_id = ?", (incident_id,))
+    existing = cursor.fetchone()
+    if not existing:
+        conn.close()
+        return None
+    previous_assignee = existing[0] or "Unassigned"
     now_iso = datetime.now(timezone.utc).isoformat()
 
     cursor.execute(
@@ -556,8 +606,8 @@ def assign_incident(incident_id: str, assigned_to: str, actor: str = "ANALYST") 
             now_iso,
             "ASSIGNED",
             actor,
-            f"Incident assigned to {assigned_to}.",
-            json.dumps({"assigned_to": assigned_to}),
+            f"Incident assigned from {previous_assignee} to {assigned_to}.",
+            json.dumps({"previous_assignee": previous_assignee, "assigned_to": assigned_to}),
         ),
     )
 
@@ -619,3 +669,278 @@ def get_incident_timeline(incident_id: str) -> List[Dict[str, Any]]:
         r["details"] = json.loads(r["details"]) if r.get("details") else {}
 
     return rows
+
+
+def _incident_exists(cursor, incident_id: str) -> bool:
+    cursor.execute("SELECT 1 FROM incidents WHERE incident_id = ?", (incident_id,))
+    return cursor.fetchone() is not None
+
+
+def add_incident_note(
+    incident_id: str,
+    content: str,
+    author: str = "ANALYST",
+) -> Optional[Dict[str, Any]]:
+    content = str(content or "").strip()
+    author = str(author or "").strip()
+    if not content:
+        raise ValueError("Note content is required")
+    if len(content) > 10000:
+        raise ValueError("Note content must be 10000 characters or fewer")
+    if not author:
+        raise ValueError("Author is required")
+
+    initialize_database()
+    conn = get_connection()
+    cursor = conn.cursor()
+    if not _incident_exists(cursor, incident_id):
+        conn.close()
+        return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    note_id = f"NOTE-{hashlib.sha256(f'{incident_id}{author}{now_iso}{content}'.encode()).hexdigest()[:12].upper()}"
+    cursor.execute(
+        "INSERT INTO incident_notes (note_id, incident_id, author, content, created_at) VALUES (?, ?, ?, ?, ?)",
+        (note_id, incident_id, author, content, now_iso),
+    )
+    event_id = f"EVT-{hashlib.md5(f'{incident_id}{note_id}'.encode()).hexdigest()[:10]}"
+    cursor.execute(
+        "INSERT INTO incident_timeline (event_id, incident_id, timestamp, event_type, actor, description, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (event_id, incident_id, now_iso, "NOTE_ADDED", author, f"Investigation note added by {author}.", json.dumps({"note_id": note_id})),
+    )
+    cursor.execute("UPDATE incidents SET updated_at = ? WHERE incident_id = ?", (now_iso, incident_id))
+    conn.commit()
+    conn.close()
+    return get_incident_note(note_id)
+
+
+def get_incident_note(note_id: str) -> Optional[Dict[str, Any]]:
+    initialize_database()
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM incident_notes WHERE note_id = ?", (note_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_incident_notes(incident_id: str) -> List[Dict[str, Any]]:
+    initialize_database()
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute(
+        "SELECT * FROM incident_notes WHERE incident_id = ? ORDER BY created_at ASC, note_id ASC",
+        (incident_id,),
+    ).fetchall()]
+    conn.close()
+    return rows
+
+
+def add_incident_evidence(
+    incident_id: str,
+    evidence_type: str,
+    description: str,
+    source: str,
+    collected_at: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    evidence_type = str(evidence_type or "").strip()
+    description = str(description or "").strip()
+    source = str(source or "").strip()
+    if not evidence_type or not description or not source:
+        raise ValueError("Evidence type, description, and source are required")
+    if len(evidence_type) > 100 or len(description) > 10000 or len(source) > 500:
+        raise ValueError("Evidence fields exceed their maximum length")
+
+    collected_at = str(collected_at or datetime.now(timezone.utc).isoformat()).strip()
+    try:
+        datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("collected_at must be a valid ISO-8601 timestamp") from exc
+
+    initialize_database()
+    conn = get_connection()
+    cursor = conn.cursor()
+    if not _incident_exists(cursor, incident_id):
+        conn.close()
+        return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    evidence_id = f"EVID-{hashlib.sha256(f'{incident_id}{source}{collected_at}{now_iso}'.encode()).hexdigest()[:12].upper()}"
+    cursor.execute(
+        "INSERT INTO incident_evidence (evidence_id, incident_id, evidence_type, description, source, collected_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (evidence_id, incident_id, evidence_type, description, source, collected_at, now_iso),
+    )
+    event_id = f"EVT-{hashlib.md5(f'{incident_id}{evidence_id}'.encode()).hexdigest()[:10]}"
+    cursor.execute(
+        "INSERT INTO incident_timeline (event_id, incident_id, timestamp, event_type, actor, description, details) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (event_id, incident_id, now_iso, "EVIDENCE_REGISTERED", "ANALYST", f"Evidence registered: {evidence_type} from {source}.", json.dumps({"evidence_id": evidence_id})),
+    )
+    cursor.execute("UPDATE incidents SET updated_at = ? WHERE incident_id = ?", (now_iso, incident_id))
+    conn.commit()
+    conn.close()
+    return get_incident_evidence(evidence_id)
+
+
+def get_incident_evidence(evidence_id: str) -> Optional[Dict[str, Any]]:
+    initialize_database()
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM incident_evidence WHERE evidence_id = ?", (evidence_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_incident_evidence_list(incident_id: str) -> List[Dict[str, Any]]:
+    initialize_database()
+    conn = get_connection()
+    rows = [dict(row) for row in conn.execute(
+        "SELECT * FROM incident_evidence WHERE incident_id = ? ORDER BY collected_at ASC, evidence_id ASC",
+        (incident_id,),
+    ).fetchall()]
+    conn.close()
+    return rows
+
+
+def get_response_recommendations(incident_id: str) -> Optional[List[Dict[str, Any]]]:
+    incident = get_incident(incident_id)
+    if not incident:
+        return None
+    alerts = get_incident_alerts(incident_id)
+    attack_types = sorted({str(alert.get("attack_type") or incident["primary_attack_type"]) for alert in alerts})
+    from src.intel.mitre_attack import MitreAttackEngine
+
+    recommendations: List[Dict[str, Any]] = []
+    for attack_type in attack_types or [incident["primary_attack_type"]]:
+        mapping = MitreAttackEngine.get_mitre_mapping(attack_type)
+        recommendation_id = f"REC-{hashlib.sha256(f'{incident_id}:{attack_type}'.encode()).hexdigest()[:12].upper()}"
+        recommendations.append({
+            "recommendation_id": recommendation_id,
+            "incident_id": incident_id,
+            "title": f"Contain and investigate {attack_type} activity",
+            "category": "CONTAINMENT",
+            "recommendation": "Validate the affected entities, preserve relevant telemetry, and apply approved containment procedures through the organization's change process.",
+            "reason": f"The incident contains {attack_type} alerts at {incident['severity']} severity with {incident['alert_count']} related alert(s).",
+            "mitre_attack": mapping,
+            "performed": False,
+            "review_status": "PENDING_REVIEW",
+            "automated_action": False,
+        })
+
+    if incident["severity"] in {"HIGH", "CRITICAL"}:
+        recommendations.append({
+            "recommendation_id": f"REC-{hashlib.sha256(f'{incident_id}:escalate'.encode()).hexdigest()[:12].upper()}",
+            "incident_id": incident_id,
+            "title": "Escalate for coordinated analyst review",
+            "category": "ESCALATION",
+            "recommendation": "Notify the designated SOC lead and coordinate investigation ownership before making containment changes.",
+            "reason": f"The incident severity is {incident['severity']} and its risk score is {incident['risk_score']:.1f}/100.",
+            "mitre_attack": None,
+            "performed": False,
+            "review_status": "PENDING_REVIEW",
+            "automated_action": False,
+        })
+
+    initialize_database()
+    conn = get_connection()
+    reviews = {
+        row["recommendation_id"]: dict(row)
+        for row in conn.execute(
+            "SELECT * FROM incident_recommendation_reviews WHERE incident_id = ?",
+            (incident_id,),
+        ).fetchall()
+    }
+    conn.close()
+    for item in recommendations:
+        review = reviews.get(item["recommendation_id"])
+        if review:
+            item.update({
+                "review_status": review["decision"],
+                "reviewer": review["reviewer"],
+                "review_comment": review["comment"],
+                "reviewed_at": review["reviewed_at"],
+            })
+    return recommendations
+
+
+def review_response_recommendation(
+    incident_id: str,
+    recommendation_id: str,
+    decision: str,
+    reviewer: str = "ANALYST",
+    comment: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    decision = str(decision or "").strip().upper()
+    reviewer = str(reviewer or "").strip()
+    if decision not in {"APPROVED", "REJECTED"}:
+        raise ValueError("Decision must be APPROVED or REJECTED")
+    if not reviewer:
+        raise ValueError("Reviewer is required")
+    recommendations = get_response_recommendations(incident_id)
+    if recommendations is None:
+        return None
+    if not any(item["recommendation_id"] == recommendation_id for item in recommendations):
+        return None
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    initialize_database()
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO incident_recommendation_reviews (recommendation_id, incident_id, reviewer, decision, comment, reviewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (recommendation_id, incident_id, reviewer, decision, str(comment).strip() if comment else None, now_iso),
+    )
+    conn.commit()
+    conn.close()
+    for item in recommendations:
+        if item["recommendation_id"] == recommendation_id:
+            item.update({"review_status": decision, "reviewer": reviewer, "review_comment": comment, "reviewed_at": now_iso})
+            return item
+    return None
+
+
+def get_incident_report(incident_id: str) -> Optional[Dict[str, Any]]:
+    incident = get_incident(incident_id)
+    if not incident:
+        return None
+    alerts = get_incident_alerts(incident_id)
+    from src.intel.enrichment import enrich_incident
+    intelligence = enrich_incident(incident, correlated_alerts=alerts)
+    return {
+        "incident": incident,
+        "related_alerts": alerts,
+        "notes": get_incident_notes(incident_id),
+        "evidence": get_incident_evidence_list(incident_id),
+        "timeline": get_incident_timeline(incident_id),
+        "mitre_attack": intelligence.get("mitre_attack", {}),
+        "recommendations": get_response_recommendations(incident_id) or [],
+        "resolution": {
+            "status": incident.get("status"),
+            "summary": incident.get("resolution_summary"),
+            "resolved_at": incident.get("resolved_at"),
+        },
+    }
+
+
+def render_incident_report_markdown(report: Dict[str, Any]) -> str:
+    incident = report["incident"]
+    lines = [
+        f"# Incident {incident['incident_id']}",
+        "",
+        f"- **Title:** {incident.get('title', '')}",
+        f"- **Status:** {incident.get('status', '')}",
+        f"- **Severity:** {incident.get('severity', '')}",
+        f"- **Risk score:** {incident.get('risk_score', 0)} / 100",
+        f"- **Assigned analyst:** {incident.get('assigned_to', 'Unassigned')}",
+        f"- **Primary attack:** {incident.get('primary_attack_type', '')}",
+        "",
+        "## Resolution",
+        f"{incident.get('resolution_summary') or 'Not resolved.'}",
+        "",
+        "## Related Alerts",
+    ]
+    lines.extend(f"- {alert.get('alert_id')}: {alert.get('attack_type')} ({alert.get('severity')})" for alert in report["related_alerts"])
+    lines.append("\n## Investigation Notes")
+    lines.extend(f"- {note['created_at']} - {note['author']}: {note['content']}" for note in report["notes"])
+    lines.append("\n## Evidence")
+    lines.extend(f"- {item['evidence_type']}: {item['description']} (source: {item['source']}, collected: {item['collected_at']})" for item in report["evidence"])
+    lines.append("\n## Timeline")
+    lines.extend(f"- {event['timestamp']} - {event['event_type']} - {event['actor']}: {event['description']}" for event in report["timeline"])
+    lines.append("\n## MITRE ATT&CK")
+    mitre = report.get("mitre_attack") or {}
+    lines.append(f"- {mitre.get('technique_id') or 'Unmapped'}: {mitre.get('technique_name') or 'No mapping'}")
+    return "\n".join(lines) + "\n"

@@ -599,11 +599,14 @@ def get_incident(incident_id):
     return None
 
 
-def update_incident_status(incident_id, status, actor="ANALYST"):
+def update_incident_status(incident_id, status, actor="ANALYST", resolution_summary=None):
+    payload = {"status": status, "actor": actor}
+    if resolution_summary is not None:
+        payload["resolution_summary"] = resolution_summary
     res = _request(
         "POST",
         f"/api/incidents/{incident_id}/status",
-        json={"status": status, "actor": actor},
+        json=payload,
     )
     if isinstance(res, dict):
         return res.get("incident")
@@ -633,6 +636,83 @@ def get_incident_timeline(incident_id):
     if isinstance(res, dict):
         return res.get("timeline", [])
     return []
+
+
+def get_incident_notes(incident_id):
+    res = _request("GET", f"/api/incidents/{incident_id}/notes")
+    if isinstance(res, dict):
+        return res.get("notes", [])
+    return []
+
+
+def add_incident_note(incident_id, content, author="ANALYST"):
+    res = _request(
+        "POST",
+        f"/api/incidents/{incident_id}/notes",
+        json={"content": content, "author": author},
+    )
+    if isinstance(res, dict):
+        return res.get("note")
+    return None
+
+
+def get_incident_evidence(incident_id):
+    res = _request("GET", f"/api/incidents/{incident_id}/evidence")
+    if isinstance(res, dict):
+        return res.get("evidence", [])
+    return []
+
+
+def add_incident_evidence(incident_id, evidence_type, description, source, collected_at=None):
+    payload = {
+        "evidence_type": evidence_type,
+        "description": description,
+        "source": source,
+    }
+    if collected_at:
+        payload["collected_at"] = collected_at
+    res = _request("POST", f"/api/incidents/{incident_id}/evidence", json=payload)
+    if isinstance(res, dict):
+        return res.get("evidence")
+    return None
+
+
+def get_incident_recommendations(incident_id):
+    res = _request("GET", f"/api/incidents/{incident_id}/recommendations")
+    if isinstance(res, dict):
+        return res.get("recommendations", [])
+    return []
+
+
+def review_incident_recommendation(incident_id, recommendation_id, decision, reviewer="ANALYST", comment=None):
+    payload = {"decision": decision, "reviewer": reviewer}
+    if comment is not None:
+        payload["comment"] = comment
+    res = _request(
+        "POST",
+        f"/api/incidents/{incident_id}/recommendations/{recommendation_id}/review",
+        json=payload,
+    )
+    if isinstance(res, dict):
+        return res.get("recommendation")
+    return None
+
+
+def get_incident_report(incident_id, format="json"):
+    return _request("GET", f"/api/incidents/{incident_id}/report", params={"format": format})
+
+
+def get_incident_report_markdown(incident_id):
+    response = requests.get(
+        f"{API_BASE_URL}/api/incidents/{incident_id}/report",
+        params={"format": "markdown"},
+        timeout=10,
+    )
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        raise RuntimeError(f"CyberSentinel API error: {exc}") from exc
+    return response.text
 
 
 # ============================================================

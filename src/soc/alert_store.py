@@ -1,4 +1,5 @@
 import hashlib
+import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -13,11 +14,9 @@ import pandas as pd
 DEFAULT_ALERT_LIMIT = 10000
 MAX_ALERT_LIMIT = 10000
 
-DB_DIR = Path(
-    "/home/charay/cybersentinel-data/soc"
-)
-
-DB_PATH = DB_DIR / "alerts.db"
+_configured_db_path = os.environ.get("CYBERSENTINEL_SOC_DB_PATH")
+DB_PATH = Path(_configured_db_path) if _configured_db_path else Path("/home/charay/cybersentinel-data/soc/alerts.db")
+DB_DIR = DB_PATH.parent
 
 
 # ============================================================
@@ -171,6 +170,8 @@ def initialize_database():
                 ("protocols", "TEXT"),
                 ("assigned_to", "TEXT DEFAULT 'Unassigned'"),
                 ("summary", "TEXT"),
+                ("resolution_summary", "TEXT"),
+                ("resolved_at", "TEXT"),
             ]:
                 if col not in inc_cols:
                     try:
@@ -262,6 +263,47 @@ def initialize_database():
                     actor TEXT NOT NULL DEFAULT 'SYSTEM',
                     description TEXT NOT NULL,
                     details TEXT
+                )
+                """
+            )
+
+            # Phase 6 case-management tables. These are additive so existing
+            # alerts, incidents, replay history, and intelligence remain intact.
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS incident_notes (
+                    note_id TEXT PRIMARY KEY,
+                    incident_id TEXT NOT NULL,
+                    author TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS incident_evidence (
+                    evidence_id TEXT PRIMARY KEY,
+                    incident_id TEXT NOT NULL,
+                    evidence_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    collected_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS incident_recommendation_reviews (
+                    recommendation_id TEXT PRIMARY KEY,
+                    incident_id TEXT NOT NULL,
+                    reviewer TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    comment TEXT,
+                    reviewed_at TEXT NOT NULL
                 )
                 """
             )

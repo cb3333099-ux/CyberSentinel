@@ -49,6 +49,13 @@ from src.api.client import (
     assign_incident,
     get_incident_alerts,
     get_incident_timeline,
+    get_incident_notes,
+    add_incident_note,
+    get_incident_evidence,
+    add_incident_evidence,
+    get_incident_recommendations,
+    review_incident_recommendation,
+    get_incident_report_markdown,
     get_indicators,
     add_indicator,
     remove_indicator,
@@ -1243,6 +1250,11 @@ elif current_view == "Incidents":
 
             # Analyst Workflow Action Buttons
             st.markdown('<div style="font-size:10px; font-weight:700; color:#9ca3af; margin-top:8px; margin-bottom:4px;">ANALYST ACTIONS</div>', unsafe_allow_html=True)
+            resolution_input = st.text_input(
+                "Resolution summary (used when resolving)",
+                value=selected_inc.get("resolution_summary") or "",
+                key=f"resolution_input_{inc_id}",
+            )
             a1, a2, a3, a4 = st.columns(4)
             with a1:
                 if st.button("INVESTIGATE", use_container_width=True, key=f"btn_inv_{inc_id}"):
@@ -1261,7 +1273,7 @@ elif current_view == "Incidents":
             with a3:
                 if st.button("RESOLVE", use_container_width=True, key=f"btn_res_{inc_id}"):
                     try:
-                        update_incident_status(inc_id, "RESOLVED")
+                        update_incident_status(inc_id, "RESOLVED", resolution_summary=resolution_input or None)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Error: {exc}")
@@ -1392,6 +1404,98 @@ elif current_view == "Incidents":
                     st.info("No timeline events logged for this incident yet.")
             except Exception as exc:
                 st.error(f"Failed to fetch timeline: {exc}")
+
+            # Phase 6 case-management records
+            st.markdown('<div class="soc-section-header">INVESTIGATION NOTES</div>', unsafe_allow_html=True)
+            try:
+                notes = get_incident_notes(inc_id)
+                if notes:
+                    notes_df = pd.DataFrame(notes)
+                    st.dataframe(
+                        notes_df[["created_at", "author", "content"]].rename(columns={
+                            "created_at": "TIME", "author": "AUTHOR", "content": "NOTE"
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=150,
+                    )
+                else:
+                    st.info("No investigation notes have been recorded.")
+                note_col, note_author_col, note_button_col = st.columns([5, 2, 1])
+                with note_col:
+                    note_text = st.text_input("Add investigation note", key=f"note_text_{inc_id}")
+                with note_author_col:
+                    note_author = st.text_input("Analyst", value="ANALYST", key=f"note_author_{inc_id}")
+                with note_button_col:
+                    st.markdown('<div style="height:27px;"></div>', unsafe_allow_html=True)
+                    if st.button("ADD", key=f"note_add_{inc_id}"):
+                        add_incident_note(inc_id, note_text, note_author)
+                        st.rerun()
+            except Exception as exc:
+                st.error(f"Failed to manage notes: {exc}")
+
+            st.markdown('<div class="soc-section-header">EVIDENCE REGISTER</div>', unsafe_allow_html=True)
+            try:
+                evidence_items = get_incident_evidence(inc_id)
+                if evidence_items:
+                    evidence_df = pd.DataFrame(evidence_items)
+                    st.dataframe(
+                        evidence_df[["evidence_type", "description", "source", "collected_at"]].rename(columns={
+                            "evidence_type": "TYPE", "description": "DESCRIPTION", "source": "SOURCE", "collected_at": "COLLECTED"
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                        height=150,
+                    )
+                else:
+                    st.info("No evidence metadata has been registered.")
+                evidence_type, evidence_source = st.columns(2)
+                with evidence_type:
+                    evidence_kind = st.text_input("Evidence type", key=f"evidence_type_{inc_id}")
+                with evidence_source:
+                    evidence_origin = st.text_input("Source", key=f"evidence_source_{inc_id}")
+                evidence_description = st.text_input("Evidence description", key=f"evidence_description_{inc_id}")
+                if st.button("REGISTER EVIDENCE", key=f"evidence_add_{inc_id}"):
+                    add_incident_evidence(inc_id, evidence_kind, evidence_description, evidence_origin)
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Failed to manage evidence: {exc}")
+
+            st.markdown('<div class="soc-section-header">RESPONSE RECOMMENDATIONS</div>', unsafe_allow_html=True)
+            try:
+                recommendations = get_incident_recommendations(inc_id)
+                if recommendations:
+                    for recommendation in recommendations:
+                        with st.container(border=True):
+                            st.markdown(f"**{recommendation['title']}** · {recommendation['review_status']}")
+                            st.write(recommendation["recommendation"])
+                            st.caption(recommendation["reason"] + " Recommendations are advisory; no external action is automated.")
+                            rec_a, rec_r = st.columns(2)
+                            with rec_a:
+                                if st.button("APPROVE", key=f"rec_approve_{recommendation['recommendation_id']}"):
+                                    review_incident_recommendation(inc_id, recommendation["recommendation_id"], "APPROVED")
+                                    st.rerun()
+                            with rec_r:
+                                if st.button("REJECT", key=f"rec_reject_{recommendation['recommendation_id']}"):
+                                    review_incident_recommendation(inc_id, recommendation["recommendation_id"], "REJECTED")
+                                    st.rerun()
+                else:
+                    st.info("No response recommendations are available.")
+            except Exception as exc:
+                st.error(f"Failed to fetch recommendations: {exc}")
+
+            st.markdown('<div class="soc-section-header">INCIDENT REPORT</div>', unsafe_allow_html=True)
+            try:
+                report_markdown = get_incident_report_markdown(inc_id)
+                st.download_button(
+                    "DOWNLOAD MARKDOWN REPORT",
+                    data=report_markdown,
+                    file_name=f"{inc_id}.md",
+                    mime="text/markdown",
+                    key=f"report_download_{inc_id}",
+                )
+            except Exception as exc:
+                st.error(f"Failed to prepare incident report: {exc}")
 
 
 # ============================================================
