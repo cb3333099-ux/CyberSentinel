@@ -1,6 +1,6 @@
 # src/api/main.py
 
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -690,6 +690,54 @@ class RecommendationReviewRequest(BaseModel):
     comment: Optional[str] = Field(default=None, max_length=5000)
 
 
+class RuleCreateRequest(BaseModel):
+    rule_id: str = Field(min_length=3, max_length=64)
+    rule_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=2000)
+    severity: str = Field(default="HIGH")
+    enabled: bool = True
+    rule_type: str = "CUSTOM"
+    threshold_param: Optional[str] = None
+    threshold_value: float = Field(default=1.0, ge=1.0, le=10000.0)
+    window_seconds: int = Field(default=300, ge=10, le=86400)
+    conditions: Optional[List[Dict[str, Any]]] = None
+    mitre_technique_id: Optional[str] = None
+    mitre_technique_name: Optional[str] = None
+    mitre_tactic_id: Optional[str] = None
+    mitre_tactic_name: Optional[str] = None
+    actor: Optional[str] = "ANALYST"
+
+
+class RuleUpdateRequest(BaseModel):
+    rule_name: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    severity: Optional[str] = None
+    threshold_value: Optional[float] = Field(default=None, ge=1.0, le=10000.0)
+    window_seconds: Optional[int] = Field(default=None, ge=10, le=86400)
+    conditions: Optional[List[Dict[str, Any]]] = None
+    mitre_technique_id: Optional[str] = None
+    mitre_technique_name: Optional[str] = None
+    mitre_tactic_id: Optional[str] = None
+    mitre_tactic_name: Optional[str] = None
+    actor: Optional[str] = "ANALYST"
+
+
+class RuleStatusRequest(BaseModel):
+    enabled: bool
+    actor: Optional[str] = "ANALYST"
+
+
+class RuleDuplicateRequest(BaseModel):
+    new_rule_id: str = Field(min_length=3, max_length=64)
+    new_rule_name: str = Field(min_length=1, max_length=200)
+    actor: Optional[str] = "ANALYST"
+
+
+class RulePreviewRequest(BaseModel):
+    rule: Dict[str, Any]
+    sample_alerts: Optional[List[Dict[str, Any]]] = None
+
+
 @app.get("/api/incidents")
 def list_incidents(
     status: Optional[str] = None,
@@ -938,6 +986,47 @@ def list_rules_endpoint():
     }
 
 
+@app.get("/api/rules/preview-samples")
+def get_preview_samples_endpoint(limit: int = 50):
+    from src.soc.detection_rules import get_preview_sample_candidates
+    samples = get_preview_sample_candidates(limit=limit)
+    return {
+        "count": len(samples),
+        "samples": samples,
+    }
+
+
+@app.post("/api/rules/preview")
+def preview_rule_endpoint(req: RulePreviewRequest):
+    from src.soc.detection_rules import preview_rule_execution
+    try:
+        res = preview_rule_execution(req.rule, sample_alerts=req.sample_alerts)
+        return res
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
+@app.get("/api/rules-audit")
+def list_all_rules_audit_endpoint(limit: int = 100):
+    from src.soc.detection_rules import get_rule_audit
+    history = get_rule_audit(limit=limit)
+    return {
+        "count": len(history),
+        "audit": history,
+    }
+
+
+@app.post("/api/rules")
+def create_rule_endpoint(req: RuleCreateRequest):
+    from src.soc.detection_rules import create_rule
+    data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    try:
+        rule = create_rule(data, analyst=req.actor or "ANALYST")
+        return {"message": "Rule created", "rule": rule}
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
 @app.get("/api/rules/{rule_id}")
 def get_rule_endpoint(rule_id: str):
     from src.soc.detection_rules import get_rule
@@ -946,6 +1035,53 @@ def get_rule_endpoint(rule_id: str):
         raise HTTPException(status_code=404, detail=f"Detection rule '{rule_id}' not found")
     return {
         "rule": rule,
+    }
+
+
+@app.put("/api/rules/{rule_id}")
+def update_rule_endpoint(rule_id: str, req: RuleUpdateRequest):
+    from src.soc.detection_rules import update_rule
+    data = req.model_dump() if hasattr(req, "model_dump") else req.dict()
+    updates = {k: v for k, v in data.items() if v is not None and k != "actor"}
+    try:
+        updated = update_rule(rule_id, updates, analyst=req.actor or "ANALYST")
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Detection rule '{rule_id}' not found")
+        return {"message": "Rule updated", "rule": updated}
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
+@app.post("/api/rules/{rule_id}/status")
+def set_rule_status_endpoint(rule_id: str, req: RuleStatusRequest):
+    from src.soc.detection_rules import set_rule_status
+    rule = set_rule_status(rule_id, req.enabled, analyst=req.actor or "ANALYST")
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"Detection rule '{rule_id}' not found")
+    return {"message": "Rule status updated", "rule": rule}
+
+
+@app.post("/api/rules/{rule_id}/duplicate")
+def duplicate_rule_endpoint(rule_id: str, req: RuleDuplicateRequest):
+    from src.soc.detection_rules import duplicate_rule
+    try:
+        duplicated = duplicate_rule(rule_id, req.new_rule_id, req.new_rule_name, analyst=req.actor or "ANALYST")
+        if not duplicated:
+            raise HTTPException(status_code=404, detail=f"Source detection rule '{rule_id}' not found")
+        return {"message": "Rule duplicated", "rule": duplicated}
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+
+@app.get("/api/rules/{rule_id}/audit")
+def get_rule_audit_endpoint(rule_id: str, limit: int = 50):
+    from src.soc.detection_rules import get_rule, get_rule_audit
+    if not get_rule(rule_id):
+        raise HTTPException(status_code=404, detail=f"Detection rule '{rule_id}' not found")
+    history = get_rule_audit(rule_id=rule_id, limit=limit)
+    return {
+        "count": len(history),
+        "audit": history,
     }
 
 

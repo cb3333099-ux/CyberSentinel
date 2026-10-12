@@ -105,6 +105,12 @@ CyberSentinel is trained and benchmarked on the benchmark **CSE-CIC-IDS2018 Clea
 - Contextual, reviewable response recommendations using incident severity, related alerts, attack types, and MITRE ATT&CK mappings. Recommendations never perform external response actions.
 - JSON and Markdown incident reports containing metadata, alerts, notes, evidence, timeline, MITRE mapping, recommendations, and resolution details.
 
+### 8. Detection Engineering Workbench (Phase 7)
+- Rule Catalog & Live Threshold Tuning: inspect, tune validated threshold values and correlation windows, enable/disable rules with live propagation to the detection engine.
+- Rule Studio: create, edit, and duplicate detection rules with structured allowlisted fields (`attack_type`, `severity`, `source_ip`, `destination_port`, `protocol`, `confidence`) and operators. No arbitrary code execution.
+- Offline Sandbox Preview: test draft rules and adjusted thresholds against bounded offline telemetry flows; provides match counts, match rates, and explanatory reasons with zero production state changes.
+- Change Audit History: persistent SQLite audit logging capturing all rule modifications, threshold adjustments, enable/disable transitions, analyst attribution, and timestamps.
+
 ---
 
 ## Installation & Setup
@@ -174,19 +180,31 @@ The existing FastAPI service exposes these incident case-management routes:
 - `POST /api/incidents/{incident_id}/recommendations/{recommendation_id}/review`
 - `GET /api/incidents/{incident_id}/report?format=json|markdown`
 
-Run the focused Phase 6 and existing incident checks with the configured environment:
+## Phase 7 Detection Engineering Workbench API Usage
+
+The FastAPI service exposes these detection engineering routes:
+
+- `GET /api/rules` — List all registered detection rules with thresholds, status, and MITRE mapping
+- `POST /api/rules` — Create a custom detection rule with allowlisted structured conditions
+- `GET /api/rules/{rule_id}` — Get detailed detection rule metadata
+- `PUT /api/rules/{rule_id}` — Update rule metadata, severity, thresholds, or correlation windows
+- `POST /api/rules/{rule_id}/status` — Enable or disable a detection rule (immediately toggles live engine evaluation)
+- `POST /api/rules/{rule_id}/duplicate` — Clone an existing rule with new ID and parameters
+- `GET /api/rules/{rule_id}/audit` & `GET /api/rules-audit` — Fetch audit history logs with analyst attribution
+- `POST /api/rules/preview` — Test rule logic against bounded offline candidate telemetry (isolated, zero state change)
+- `GET /api/rules/preview-samples` — Retrieve candidate offline flow telemetry samples for sandbox testing
+
+Run the focused Phase 7 and incident checks with the configured environment:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_phase6_incidents.py tests/test_incidents.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_phase7_detection_workbench.py tests/test_phase6_incidents.py -q
 ```
-
-Start the API and dashboard as usual, then use the `Incidents` workspace to add notes, register evidence metadata, review recommendations, and download a Markdown report.
 
 ---
 
 ## Testing & Verification
 
-Run the full automated test suite containing all 93 unit and integration tests:
+Run the full automated test suite containing all 101 unit and integration tests:
 ```bash
 python3 -m pytest tests/
 ```
@@ -198,7 +216,7 @@ wsl bash -lc "cd /mnt/d/BDA/CyberSentinel && /home/charay/cybersentinel-venv/bin
 
 Result:
 ```
-======================= 88 passed, 2 warnings in 33.65s =======================
+====================== 101 passed, 2 warnings in 38.82s ======================
 ```
 
 ---

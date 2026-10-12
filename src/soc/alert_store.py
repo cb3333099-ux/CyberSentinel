@@ -1,6 +1,8 @@
 import hashlib
+import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -307,6 +309,170 @@ def initialize_database():
                 )
                 """
             )
+
+            # Phase 7 — Detection Engineering Workbench tables
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS detection_rules (
+                    rule_id TEXT PRIMARY KEY,
+                    rule_name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    rule_type TEXT NOT NULL DEFAULT 'THRESHOLD',
+                    threshold_param TEXT,
+                    threshold_value REAL DEFAULT 1.0,
+                    window_seconds INTEGER DEFAULT 300,
+                    conditions TEXT,
+                    mitre_technique_id TEXT,
+                    mitre_technique_name TEXT,
+                    mitre_tactic_id TEXT,
+                    mitre_tactic_name TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+            cursor.execute("PRAGMA table_info(detection_rules)")
+            rule_cols = [c[1] for c in cursor.fetchall()]
+            for col, col_type in [
+                ("enabled", "INTEGER DEFAULT 1"),
+                ("rule_type", "TEXT DEFAULT 'THRESHOLD'"),
+                ("threshold_param", "TEXT"),
+                ("threshold_value", "REAL DEFAULT 1.0"),
+                ("window_seconds", "INTEGER DEFAULT 300"),
+                ("conditions", "TEXT"),
+                ("mitre_technique_id", "TEXT"),
+                ("mitre_technique_name", "TEXT"),
+                ("mitre_tactic_id", "TEXT"),
+                ("mitre_tactic_name", "TEXT"),
+            ]:
+                if col not in rule_cols:
+                    try:
+                        cursor.execute(f"ALTER TABLE detection_rules ADD COLUMN {col} {col_type}")
+                    except Exception:
+                        pass
+
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS detection_rule_audit (
+                    audit_id TEXT PRIMARY KEY,
+                    rule_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    analyst TEXT NOT NULL,
+                    details TEXT,
+                    timestamp TEXT NOT NULL
+                )
+                """
+            )
+
+            # Seed initial 5 detection rules if absent
+            now_iso = datetime.now(timezone.utc).isoformat()
+            default_rules_seed = [
+                (
+                    "RULE-001",
+                    "Repeated SSH Activity",
+                    "Triggers when multiple SSH-Bruteforce alerts originate from the same source IP within the correlation window.",
+                    "HIGH",
+                    1,
+                    "THRESHOLD",
+                    "ssh_alert_threshold",
+                    3.0,
+                    300,
+                    json.dumps([{"field": "attack_type", "operator": "contains", "value": "SSH"}]),
+                    "T1110",
+                    "Brute Force",
+                    "TA0006",
+                    "Credential Access",
+                    now_iso,
+                    now_iso,
+                ),
+                (
+                    "RULE-002",
+                    "Repeated FTP Brute-Force Activity",
+                    "Triggers when multiple FTP-BruteForce alerts originate from the same source IP within the correlation window.",
+                    "HIGH",
+                    1,
+                    "THRESHOLD",
+                    "ftp_alert_threshold",
+                    3.0,
+                    300,
+                    json.dumps([{"field": "attack_type", "operator": "contains", "value": "FTP"}]),
+                    "T1110",
+                    "Brute Force",
+                    "TA0006",
+                    "Credential Access",
+                    now_iso,
+                    now_iso,
+                ),
+                (
+                    "RULE-003",
+                    "High-Volume DoS/DDoS Activity",
+                    "Triggers when high-volume DoS or DDoS attack flows surpass the volumetric stream threshold.",
+                    "CRITICAL",
+                    1,
+                    "THRESHOLD",
+                    "dos_alert_threshold",
+                    5.0,
+                    300,
+                    json.dumps([{"field": "attack_type", "operator": "contains", "value": "DOS"}]),
+                    "T1498",
+                    "Network Denial of Service",
+                    "TA0040",
+                    "Impact",
+                    now_iso,
+                    now_iso,
+                ),
+                (
+                    "RULE-004",
+                    "Repeated Critical Alerts from Same Source",
+                    "Triggers when multiple CRITICAL severity alerts are detected from the same source entity.",
+                    "CRITICAL",
+                    1,
+                    "THRESHOLD",
+                    "critical_alert_threshold",
+                    3.0,
+                    300,
+                    json.dumps([{"field": "severity", "operator": "equals", "value": "CRITICAL"}]),
+                    "T1190",
+                    "Exploit Public-Facing Application",
+                    "TA0001",
+                    "Initial Access",
+                    now_iso,
+                    now_iso,
+                ),
+                (
+                    "RULE-005",
+                    "Known Malicious Indicator Match",
+                    "Triggers when network traffic entities match a known malicious indicator in local threat intelligence.",
+                    "CRITICAL",
+                    1,
+                    "INTEL_MATCH",
+                    "intel_match",
+                    1.0,
+                    300,
+                    json.dumps([]),
+                    "T1071",
+                    "Application Layer Protocol",
+                    "TA0011",
+                    "Command and Control",
+                    now_iso,
+                    now_iso,
+                ),
+            ]
+            for r_seed in default_rules_seed:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO detection_rules (
+                        rule_id, rule_name, description, severity, enabled, rule_type,
+                        threshold_param, threshold_value, window_seconds, conditions,
+                        mitre_technique_id, mitre_technique_name, mitre_tactic_id, mitre_tactic_name,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    r_seed,
+                )
 
             connection.commit()
             connection.close()

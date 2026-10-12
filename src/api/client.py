@@ -773,11 +773,75 @@ def get_rules():
     return []
 
 
+def list_rules():
+    return get_rules()
+
+
 def get_rule(rule_id):
     res = _request("GET", f"/api/rules/{rule_id}")
     if isinstance(res, dict):
         return res.get("rule")
     return None
+
+
+def create_rule(rule_data, actor="ANALYST"):
+    payload = dict(rule_data)
+    payload["actor"] = actor
+    res = _request("POST", "/api/rules", json=payload)
+    if isinstance(res, dict):
+        return res.get("rule")
+    return None
+
+
+def update_rule(rule_id, updates, actor="ANALYST"):
+    payload = dict(updates)
+    payload["actor"] = actor
+    res = _request("PUT", f"/api/rules/{rule_id}", json=payload)
+    if isinstance(res, dict):
+        return res.get("rule")
+    return None
+
+
+def set_rule_status(rule_id, enabled, actor="ANALYST"):
+    res = _request("POST", f"/api/rules/{rule_id}/status", json={"enabled": enabled, "actor": actor})
+    if isinstance(res, dict):
+        return res.get("rule")
+    return None
+
+
+def duplicate_rule(rule_id, new_rule_id, new_rule_name, actor="ANALYST"):
+    res = _request(
+        "POST",
+        f"/api/rules/{rule_id}/duplicate",
+        json={"new_rule_id": new_rule_id, "new_rule_name": new_rule_name, "actor": actor},
+    )
+    if isinstance(res, dict):
+        return res.get("rule")
+    return None
+
+
+def get_rule_audit_history(rule_id=None, limit=100):
+    if rule_id:
+        res = _request("GET", f"/api/rules/{rule_id}/audit", params={"limit": limit})
+    else:
+        res = _request("GET", "/api/rules-audit", params={"limit": limit})
+    if isinstance(res, dict):
+        return res.get("audit", [])
+    return []
+
+
+def preview_rule(rule_dict, sample_alerts=None):
+    payload = {"rule": rule_dict}
+    if sample_alerts is not None:
+        payload["sample_alerts"] = sample_alerts
+    return _request("POST", "/api/rules/preview", json=payload)
+
+
+def get_preview_samples(limit=50):
+    res = _request("GET", "/api/rules/preview-samples", params={"limit": limit})
+    if isinstance(res, dict):
+        return res.get("samples", [])
+    return []
 
 
 def get_mitre_techniques():

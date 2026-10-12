@@ -60,6 +60,14 @@ from src.api.client import (
     add_indicator,
     remove_indicator,
     get_rules,
+    get_rule,
+    create_rule,
+    update_rule,
+    set_rule_status,
+    duplicate_rule,
+    get_rule_audit_history,
+    preview_rule,
+    get_preview_samples,
     get_mitre_techniques,
     get_mitre_tactics,
     get_incident_intelligence,
@@ -487,6 +495,7 @@ with st.sidebar:
             "Real-Time Monitoring",
             "Incidents",
             "Threat Intelligence",
+            "Detection Engineering",
             "SOC Analytics",
             "Detection Analytics",
             "Model Intelligence",
@@ -1598,6 +1607,351 @@ elif current_view == "Threat Intelligence":
             st.dataframe(tech_table, use_container_width=True, hide_index=True, height=250)
     except Exception as exc:
         st.info("MITRE ATT&CK v19.0 coverage framework operational.")
+
+
+# ============================================================
+# VIEW — DETECTION ENGINEERING WORKBENCH (PHASE 7)
+# ============================================================
+
+elif current_view == "Detection Engineering":
+    st.markdown('<div style="font-size:12px; font-weight:700; color:#9ca3af; margin-bottom:10px;">DETECTION ENGINEERING WORKBENCH & THREAT RULE MANAGEMENT</div>', unsafe_allow_html=True)
+
+    try:
+        rules_list = get_rules()
+    except Exception as exc:
+        rules_list = []
+        st.error(f"Failed to fetch detection rules: {exc}")
+
+    active_rules_count = sum(1 for r in rules_list if r.get("enabled", True))
+    disabled_rules_count = len(rules_list) - active_rules_count
+    tech_ids = {r.get("mitre_technique_id") for r in rules_list if r.get("mitre_technique_id")}
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("TOTAL RULES", format_number(len(rules_list)))
+        st.markdown('<div class="metric-caption">ALL REGISTERED RULES</div>', unsafe_allow_html=True)
+    with m2:
+        st.metric("ACTIVE RULES", format_number(active_rules_count))
+        st.markdown('<div class="metric-caption">EVALUATING IN LIVE ENGINE</div>', unsafe_allow_html=True)
+    with m3:
+        st.metric("DISABLED RULES", format_number(disabled_rules_count))
+        st.markdown('<div class="metric-caption">MUTED FROM EVALUATION</div>', unsafe_allow_html=True)
+    with m4:
+        st.metric("MAPPED TECHNIQUES", format_number(len(tech_ids)))
+        st.markdown('<div class="metric-caption">MITRE ATT&CK ENTERPRISE</div>', unsafe_allow_html=True)
+
+    tab_catalog, tab_studio, tab_preview, tab_audit = st.tabs([
+        "RULE CATALOG & THRESHOLDS",
+        "RULE STUDIO (CREATE / EDIT / DUPLICATE)",
+        "OFFLINE SANDBOX PREVIEW",
+        "CHANGE AUDIT LOGS",
+    ])
+
+    # ----------------------------------------------------
+    # TAB 1: RULE CATALOG & THRESHOLDS
+    # ----------------------------------------------------
+    with tab_catalog:
+        st.markdown('<div class="soc-section-header">REGISTERED DETECTION RULES</div>', unsafe_allow_html=True)
+        if rules_list:
+            display_rows = []
+            for r in rules_list:
+                status_label = "ACTIVE" if r.get("enabled", True) else "DISABLED"
+                tech_label = r.get("mitre_technique_id") or "UNMAPPED"
+                display_rows.append({
+                    "RULE ID": r.get("rule_id"),
+                    "NAME": r.get("rule_name"),
+                    "SEVERITY": r.get("severity"),
+                    "TYPE": r.get("rule_type", "THRESHOLD"),
+                    "THRESHOLD": r.get("threshold_value", 1.0),
+                    "WINDOW (s)": r.get("window_seconds", 300),
+                    "STATUS": status_label,
+                    "MITRE ATT&CK": tech_label,
+                })
+            df_rules = pd.DataFrame(display_rows)
+            st.dataframe(df_rules, use_container_width=True, hide_index=True, height=220)
+        else:
+            st.info("No detection rules registered.")
+
+        st.markdown('<div class="soc-section-header">RULE INSPECTOR & THRESHOLD CONTROLLER</div>', unsafe_allow_html=True)
+        if rules_list:
+            rule_options = [f"{r['rule_id']} — {r['rule_name']}" for r in rules_list]
+            selected_option = st.selectbox("Select Rule to Inspect / Tune", rule_options, key="select_rule_inspect")
+            selected_rule_id = selected_option.split(" — ")[0]
+            selected_rule = next((r for r in rules_list if r["rule_id"] == selected_rule_id), None)
+
+            if selected_rule:
+                c_info1, c_info2 = st.columns([60, 40])
+                with c_info1:
+                    is_enabled = selected_rule.get("enabled", True)
+                    status_badge = '<span style="color:#10b981; font-weight:700;">● ACTIVE (ENABLED)</span>' if is_enabled else '<span style="color:#ef4444; font-weight:700;">● INACTIVE (DISABLED)</span>'
+                    st.markdown(f"**Rule ID:** `{selected_rule['rule_id']}` &nbsp;|&nbsp; **Status:** {status_badge}", unsafe_allow_html=True)
+                    st.write(f"**Description:** {selected_rule.get('description', '')}")
+                    st.write(f"**Severity:** `{selected_rule.get('severity')}` &nbsp;|&nbsp; **Type:** `{selected_rule.get('rule_type', 'THRESHOLD')}`")
+
+                    # Toggle Status Button
+                    toggle_label = "DISABLE RULE" if is_enabled else "ENABLE RULE"
+                    btn_type = "secondary" if is_enabled else "primary"
+                    analyst_toggle = st.text_input("Analyst Attribution", value="ANALYST", key=f"analyst_toggle_{selected_rule_id}")
+                    if st.button(toggle_label, key=f"btn_toggle_{selected_rule_id}", type=btn_type):
+                        try:
+                            set_rule_status(selected_rule_id, not is_enabled, actor=analyst_toggle)
+                            st.success(f"Rule '{selected_rule_id}' is now {'ENABLED' if not is_enabled else 'DISABLED'}.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Failed to change status: {exc}")
+
+                with c_info2:
+                    st.markdown("**Threshold & Window Tuning**")
+                    curr_threshold = float(selected_rule.get("threshold_value", 1.0))
+                    curr_window = int(selected_rule.get("window_seconds", 300))
+
+                    new_threshold = st.number_input(
+                        "Threshold Value (Count / Level)",
+                        min_value=1.0,
+                        max_value=5000.0,
+                        value=curr_threshold,
+                        step=1.0,
+                        key=f"tune_thresh_{selected_rule_id}",
+                    )
+                    new_window = st.number_input(
+                        "Correlation Window (Seconds)",
+                        min_value=10,
+                        max_value=86400,
+                        value=curr_window,
+                        step=30,
+                        key=f"tune_win_{selected_rule_id}",
+                    )
+                    if st.button("UPDATE THRESHOLD & WINDOW", key=f"btn_tune_{selected_rule_id}"):
+                        try:
+                            update_rule(
+                                selected_rule_id,
+                                {"threshold_value": new_threshold, "window_seconds": new_window},
+                                actor=analyst_toggle or "ANALYST",
+                            )
+                            st.success(f"Threshold for {selected_rule_id} updated to {new_threshold} (Window: {new_window}s).")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Failed to update threshold: {exc}")
+
+                # Display conditions if present
+                conds = selected_rule.get("conditions") or []
+                if conds:
+                    st.markdown("**Structured Conditions:**")
+                    cond_df = pd.DataFrame(conds)
+                    st.dataframe(cond_df, use_container_width=True, hide_index=True)
+
+    # ----------------------------------------------------
+    # TAB 2: RULE STUDIO (CREATE / EDIT / DUPLICATE)
+    # ----------------------------------------------------
+    with tab_studio:
+        studio_mode = st.radio(
+            "Studio Action",
+            ["Create New Rule", "Edit Existing Rule", "Duplicate Rule"],
+            horizontal=True,
+            key="studio_mode_radio",
+        )
+
+        try:
+            techniques_list = get_mitre_techniques()
+            tech_choices = ["NONE"] + [f"{t['technique_id']} - {t['technique_name']}" for t in techniques_list]
+        except Exception:
+            tech_choices = ["NONE", "T1110 - Brute Force", "T1498 - Network Denial of Service", "T1190 - Exploit Public-Facing Application", "T1071 - Application Layer Protocol"]
+
+        if studio_mode == "Create New Rule":
+            st.markdown('<div class="soc-section-header">CREATE NEW DETECTION RULE</div>', unsafe_allow_html=True)
+            col_cr1, col_cr2 = st.columns(2)
+            with col_cr1:
+                cr_id = st.text_input("Rule ID (e.g. RULE-006, RULE-SQLI)", value="RULE-006", key="cr_rule_id")
+                cr_name = st.text_input("Rule Name", value="Repeated SQL Injection Attempts", key="cr_rule_name")
+                cr_desc = st.text_area("Description", value="Detects repeated SQL injection attack flows targeting web services.", key="cr_rule_desc")
+            with col_cr2:
+                cr_sev = st.selectbox("Severity", ["CRITICAL", "HIGH", "MEDIUM", "LOW"], index=0, key="cr_rule_sev")
+                cr_type = st.selectbox("Rule Type", ["CUSTOM", "THRESHOLD", "BEHAVIORAL"], index=0, key="cr_rule_type")
+                cr_thresh = st.number_input("Threshold Value", min_value=1.0, max_value=1000.0, value=2.0, step=1.0, key="cr_rule_thresh")
+                cr_win = st.number_input("Window Seconds", min_value=10, max_value=86400, value=300, step=30, key="cr_rule_win")
+
+            st.markdown("**Rule Conditions (Structured Allowlisted Fields):**")
+            col_c1, col_c2, col_c3 = st.columns(3)
+            with col_c1:
+                c_field = st.selectbox("Field", ["attack_type", "severity", "source_ip", "destination_port", "protocol", "confidence"], key="cr_c_field")
+            with col_c2:
+                c_op = st.selectbox("Operator", ["contains", "equals", "not_equals", "greater_than", "less_than", "in_list"], key="cr_c_op")
+            with col_c3:
+                c_val = st.text_input("Value", value="SQL Injection", key="cr_c_val")
+
+            cr_tech = st.selectbox("MITRE ATT&CK Technique Mapping", tech_choices, index=3 if len(tech_choices) > 3 else 0, key="cr_rule_tech")
+            cr_analyst = st.text_input("Author Analyst", value="ANALYST", key="cr_analyst")
+
+            if st.button("CREATE RULE", type="primary", key="btn_create_rule"):
+                try:
+                    tech_id_val = cr_tech.split(" - ")[0] if cr_tech != "NONE" else None
+                    new_rule_data = {
+                        "rule_id": cr_id.strip().upper(),
+                        "rule_name": cr_name.strip(),
+                        "description": cr_desc.strip(),
+                        "severity": cr_sev,
+                        "rule_type": cr_type,
+                        "threshold_value": cr_thresh,
+                        "window_seconds": cr_win,
+                        "enabled": True,
+                        "conditions": [{"field": c_field, "operator": c_op, "value": c_val}],
+                        "mitre_technique_id": tech_id_val,
+                    }
+                    created = create_rule(new_rule_data, actor=cr_analyst)
+                    st.success(f"Rule '{created.get('rule_id')}' created successfully.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Error creating rule: {exc}")
+
+        elif studio_mode == "Edit Existing Rule":
+            st.markdown('<div class="soc-section-header">EDIT DETECTION RULE</div>', unsafe_allow_html=True)
+            if rules_list:
+                edit_choices = [f"{r['rule_id']} — {r['rule_name']}" for r in rules_list]
+                edit_sel = st.selectbox("Select Rule to Edit", edit_choices, key="edit_rule_select")
+                edit_id = edit_sel.split(" — ")[0]
+                target_r = next((r for r in rules_list if r["rule_id"] == edit_id), None)
+
+                if target_r:
+                    ed_name = st.text_input("Rule Name", value=target_r.get("rule_name", ""), key="ed_name")
+                    ed_desc = st.text_area("Description", value=target_r.get("description", ""), key="ed_desc")
+                    col_ed1, col_ed2 = st.columns(2)
+                    with col_ed1:
+                        sev_opts = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+                        cur_sev = target_r.get("severity", "HIGH").upper()
+                        sev_idx = sev_opts.index(cur_sev) if cur_sev in sev_opts else 1
+                        ed_sev = st.selectbox("Severity", sev_opts, index=sev_idx, key="ed_sev")
+                    with col_ed2:
+                        ed_thresh = st.number_input("Threshold Value", min_value=1.0, max_value=5000.0, value=float(target_r.get("threshold_value", 1.0)), key="ed_thresh")
+
+                    ed_analyst = st.text_input("Analyst", value="ANALYST", key="ed_analyst")
+                    if st.button("SAVE CHANGES", type="primary", key="btn_save_edit"):
+                        try:
+                            update_rule(
+                                edit_id,
+                                {
+                                    "rule_name": ed_name,
+                                    "description": ed_desc,
+                                    "severity": ed_sev,
+                                    "threshold_value": ed_thresh,
+                                },
+                                actor=ed_analyst,
+                            )
+                            st.success(f"Rule '{edit_id}' updated successfully.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Error updating rule: {exc}")
+
+        elif studio_mode == "Duplicate Rule":
+            st.markdown('<div class="soc-section-header">DUPLICATE DETECTION RULE</div>', unsafe_allow_html=True)
+            if rules_list:
+                dup_choices = [f"{r['rule_id']} — {r['rule_name']}" for r in rules_list]
+                dup_sel = st.selectbox("Source Rule to Duplicate", dup_choices, key="dup_src_select")
+                src_id = dup_sel.split(" — ")[0]
+                new_id = st.text_input("New Rule ID", value=f"{src_id}-CLONE", key="dup_new_id")
+                new_name = st.text_input("New Rule Name", value=f"Copy of {dup_sel.split(' — ')[1]}", key="dup_new_name")
+                dup_analyst = st.text_input("Analyst", value="ANALYST", key="dup_analyst")
+
+                if st.button("DUPLICATE RULE", type="primary", key="btn_exec_duplicate"):
+                    try:
+                        duplicated = duplicate_rule(src_id, new_id.strip().upper(), new_name.strip(), actor=dup_analyst)
+                        st.success(f"Rule duplicated successfully as '{duplicated.get('rule_id')}'.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Error duplicating rule: {exc}")
+
+    # ----------------------------------------------------
+    # TAB 3: OFFLINE SANDBOX PREVIEW
+    # ----------------------------------------------------
+    with tab_preview:
+        st.markdown(
+            """
+            <div style="background-color:#1c2230; border:1px solid #3b82f6; border-radius:4px; padding:10px 14px; margin-bottom:12px;">
+                <span style="font-size:12px; font-weight:700; color:#60a5fa;">🧪 OFFLINE TEST BENCH — PREVIEW ONLY</span><br>
+                <span style="font-size:11px; color:#9ca3af;">
+                    Test rule logic and threshold triggers against bounded offline sample telemetry.
+                    Preview mode strictly performs in-memory evaluation and <strong>NEVER</strong> generates live alerts, alters incidents, or mutates production rules.
+                </span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        p_col1, p_col2 = st.columns([60, 40])
+        with p_col1:
+            preview_rule_opts = [f"{r['rule_id']} — {r['rule_name']}" for r in rules_list] if rules_list else ["RULE-001 — Repeated SSH Activity"]
+            sel_prev_rule = st.selectbox("Select Rule to Test", preview_rule_opts, key="prev_sel_rule")
+            prev_rule_id = sel_prev_rule.split(" — ")[0]
+            target_prev_rule = next((r for r in rules_list if r["rule_id"] == prev_rule_id), None)
+        with p_col2:
+            sample_limit = st.slider("Sample Evaluation Size", min_value=5, max_value=50, value=25, key="prev_sample_limit")
+
+        if st.button("RUN OFFLINE PREVIEW", type="primary", key="btn_run_preview"):
+            if target_prev_rule:
+                try:
+                    samples = get_preview_samples(limit=sample_limit)
+                    preview_res = preview_rule(target_prev_rule, sample_alerts=samples)
+
+                    match_count = preview_res.get("match_count", 0)
+                    total_samples = preview_res.get("total_samples_evaluated", 0)
+                    match_pct = preview_res.get("match_percentage", 0.0)
+
+                    st.markdown('<div class="soc-section-header">PREVIEW SIMULATION RESULTS</div>', unsafe_allow_html=True)
+                    r1, r2, r3, r4 = st.columns(4)
+                    with r1:
+                        st.metric("SAMPLES EVALUATED", format_number(total_samples))
+                    with r2:
+                        st.metric("MATCHES DETECTED", format_number(match_count))
+                    with r3:
+                        st.metric("MATCH RATE", f"{match_pct}%")
+                    with r4:
+                        st.metric("TESTED THRESHOLD", f"{preview_res.get('threshold_value', 1.0)}")
+
+                    st.info(preview_res.get("summary", "Simulation complete."))
+
+                    matches = preview_res.get("matches", [])
+                    if matches:
+                        st.markdown("**Sample Telemetry Flows That Triggered Match:**")
+                        m_df = pd.DataFrame(matches)
+                        cols_to_show = [c for c in ["alert_id", "timestamp", "attack_type", "severity", "source_ip", "destination_port", "reason"] if c in m_df.columns]
+                        st.dataframe(m_df[cols_to_show].rename(columns={
+                            "alert_id": "SAMPLE ID",
+                            "timestamp": "TIME",
+                            "attack_type": "ATTACK TYPE",
+                            "severity": "SEVERITY",
+                            "source_ip": "SOURCE IP",
+                            "destination_port": "PORT",
+                            "reason": "MATCH REASON",
+                        }), use_container_width=True, hide_index=True)
+                    else:
+                        st.warning("No sample flows matched the tested conditions and threshold.")
+                except Exception as exc:
+                    st.error(f"Preview execution failed: {exc}")
+
+    # ----------------------------------------------------
+    # TAB 4: CHANGE AUDIT LOGS
+    # ----------------------------------------------------
+    with tab_audit:
+        st.markdown('<div class="soc-section-header">DETECTION RULE AUDIT & LIFECYCLE HISTORY</div>', unsafe_allow_html=True)
+        try:
+            audit_records = get_rule_audit_history(limit=100)
+            if audit_records:
+                audit_df = pd.DataFrame(audit_records)
+                audit_df["TIME"] = pd.to_datetime(audit_df["timestamp"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+                audit_df["DETAILS"] = audit_df["details"].apply(lambda d: json.dumps(d) if isinstance(d, dict) else str(d))
+                st.dataframe(
+                    audit_df[["TIME", "rule_id", "action", "analyst", "DETAILS"]].rename(columns={
+                        "rule_id": "RULE ID",
+                        "action": "ACTION",
+                        "analyst": "ANALYST",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=260,
+                )
+            else:
+                st.info("No rule audit records have been logged yet.")
+        except Exception as exc:
+            st.error(f"Failed to fetch audit log: {exc}")
 
 
 # ============================================================
