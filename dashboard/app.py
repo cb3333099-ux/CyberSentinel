@@ -1,3 +1,4 @@
+from src.api.client import get_mitre_coverage
 import sys
 import json
 import time
@@ -1336,7 +1337,16 @@ elif current_view == "Incidents":
             queue_display = inc_df.copy()
             queue_display["RISK"] = queue_display["risk_score"].apply(lambda s: f"⚡ {s:.0f}")
             queue_display["SEVERITY"] = queue_display["severity"].apply(lambda s: f"● {s}")
-            queue_display["FIRST SEEN"] = pd.to_datetime(queue_display["first_seen"]).dt.strftime("%H:%M:%S").fillna("N/A")
+            queue_display["FIRST SEEN"] = (
+                pd.to_datetime(
+                    queue_display["first_seen"],
+                    format="mixed",
+                    errors="coerce",
+                    utc=True,
+                )
+                .dt.strftime("%H:%M:%S")
+                .fillna("N/A")
+                )
             queue_display["LAST SEEN"] = pd.to_datetime(queue_display["last_seen"]).dt.strftime("%H:%M:%S").fillna("N/A")
 
             queue_table = queue_display[[
@@ -2564,19 +2574,30 @@ elif current_view == "Administration" and is_admin:
         st.markdown('<div class="soc-section-header">USER ACCOUNTS & ACCESS ROLES</div>', unsafe_allow_html=True)
         try:
             users_res = list_users()
-            user_list = users_res.get("users", [])
+            user_list = users_res.get("users", []) if isinstance(users_res, dict) else (users_res if isinstance(users_res, list) else [])
             if user_list:
                 df_users = pd.DataFrame(user_list)
+                login_col = "last_login_at" if "last_login_at" in df_users.columns else ("last_login" if "last_login" in df_users.columns else None)
+                if login_col is None:
+                    df_users["last_login_at"] = None
+                    login_col = "last_login_at"
+
+                base_cols = ["user_id", "username", "role", "display_name", "is_active", "created_at"]
+                for c in base_cols:
+                    if c not in df_users.columns:
+                        df_users[c] = None
+
+                display_df = df_users[base_cols + [login_col]].rename(columns={
+                    "user_id": "USER ID",
+                    "username": "USERNAME",
+                    "role": "ROLE",
+                    "display_name": "DISPLAY NAME",
+                    "is_active": "ACTIVE",
+                    "created_at": "CREATED AT",
+                    login_col: "LAST LOGIN",
+                })
                 st.dataframe(
-                    df_users[["user_id", "username", "role", "display_name", "is_active", "created_at", "last_login"]].rename(columns={
-                        "user_id": "USER ID",
-                        "username": "USERNAME",
-                        "role": "ROLE",
-                        "display_name": "DISPLAY NAME",
-                        "is_active": "ACTIVE",
-                        "created_at": "CREATED AT",
-                        "last_login": "LAST LOGIN",
-                    }),
+                    display_df,
                     use_container_width=True,
                     hide_index=True,
                 )
@@ -2739,11 +2760,16 @@ elif current_view == "Administration" and is_admin:
 
         st.markdown('<div class="soc-section-header">AUTHENTICATION & SECURITY AUDIT LOGS</div>', unsafe_allow_html=True)
         try:
-            audit_logs = get_auth_audit_logs(limit=50)
+            audit_res = get_auth_audit_logs(limit=50)
+            audit_logs = audit_res.get("logs", []) if isinstance(audit_res, dict) else (audit_res if isinstance(audit_res, list) else [])
             if audit_logs:
                 df_audit = pd.DataFrame(audit_logs)
+                expected_cols = ["audit_id", "event_type", "username", "actor", "timestamp"]
+                for col in expected_cols:
+                    if col not in df_audit.columns:
+                        df_audit[col] = None
                 st.dataframe(
-                    df_audit[["audit_id", "event_type", "username", "actor", "timestamp"]].rename(columns={
+                    df_audit[expected_cols].rename(columns={
                         "audit_id": "AUDIT ID",
                         "event_type": "EVENT",
                         "username": "TARGET USER",

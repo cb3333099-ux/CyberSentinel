@@ -118,6 +118,14 @@ def _clean_user_dict(row: Any) -> Dict[str, Any]:
     d = dict(row)
     d.pop("password_hash", None)
     d["is_active"] = bool(d.get("is_active", 1))
+    # Align optional last_login / last_login_at with existing database schema
+    if "last_login_at" in d:
+        d.setdefault("last_login", d["last_login_at"])
+    elif "last_login" in d:
+        d.setdefault("last_login_at", d["last_login"])
+    else:
+        d["last_login_at"] = None
+        d["last_login"] = None
     return d
 
 
@@ -143,11 +151,11 @@ def get_user_by_username(username: str, include_hash: bool = False) -> Optional[
         row = cursor.fetchone()
         if not row:
             return None
-        d = dict(row)
-        d["is_active"] = bool(d.get("is_active", 1))
-        if not include_hash:
-            d.pop("password_hash", None)
-        return d
+        if include_hash:
+            d = dict(row)
+            d["is_active"] = bool(d.get("is_active", 1))
+            return d
+        return _clean_user_dict(row)
     finally:
         conn.close()
 
@@ -491,4 +499,5 @@ def authenticate_user(username: str, password: str) -> Tuple[Optional[Dict[str, 
     record_auth_audit("LOGIN_SUCCESS", username_clean, actor=username_clean)
     user_clean = _clean_user_dict(user_record)
     user_clean["last_login_at"] = now_iso
+    user_clean["last_login"] = now_iso
     return user_clean, None

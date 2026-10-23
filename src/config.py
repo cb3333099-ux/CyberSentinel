@@ -49,8 +49,33 @@ LOG_LEVEL: str = os.environ.get("CYBERSENTINEL_LOG_LEVEL", "INFO").upper()
 # Model Artifacts
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 MODEL_DIR: Path = PROJECT_ROOT / "models"
-STAGE1_MODEL_PATH: Path = MODEL_DIR / "rf_stage1_model"
-STAGE2_MODEL_PATH: Path = MODEL_DIR / "gbt_stage2_model"
+
+
+def get_stage1_model_path() -> Path:
+    _env_path = os.environ.get("CYBERSENTINEL_STAGE1_MODEL_PATH")
+    if _env_path:
+        return Path(_env_path)
+    primary = MODEL_DIR / "stage1_random_forest"
+    if primary.exists():
+        return primary
+    return MODEL_DIR / "rf_stage1_model"
+
+
+def get_stage2_model_path() -> Path:
+    _env_path = os.environ.get("CYBERSENTINEL_STAGE2_MODEL_PATH")
+    if _env_path:
+        return Path(_env_path)
+    no_temp = MODEL_DIR / "stage2_attack_classifier_no_temporal"
+    if no_temp.exists():
+        return no_temp
+    primary = MODEL_DIR / "stage2_attack_classifier"
+    if primary.exists():
+        return primary
+    return MODEL_DIR / "gbt_stage2_model"
+
+
+STAGE1_MODEL_PATH: Path = get_stage1_model_path()
+STAGE2_MODEL_PATH: Path = get_stage2_model_path()
 SCALER_PATH: Path = MODEL_DIR / "scaler_model"
 
 
@@ -59,6 +84,8 @@ def get_system_config_summary() -> Dict[str, Any]:
     Returns public, safe configuration metadata for health/readiness reporting.
     Does NOT leak secrets, passwords, or raw hashes.
     """
+    s1_path = get_stage1_model_path()
+    s2_path = get_stage2_model_path()
     return {
         "api_host": API_HOST,
         "api_port": API_PORT,
@@ -68,6 +95,8 @@ def get_system_config_summary() -> Dict[str, Any]:
         "log_level": LOG_LEVEL,
         "db_configured": str(get_soc_db_path()),
         "backup_directory": str(get_backup_dir()),
-        "stage1_model_exists": STAGE1_MODEL_PATH.exists(),
-        "stage2_model_exists": STAGE2_MODEL_PATH.exists(),
+        "stage1_model_path": str(s1_path),
+        "stage2_model_path": str(s2_path),
+        "stage1_model_exists": s1_path.exists(),
+        "stage2_model_exists": s2_path.exists(),
     }

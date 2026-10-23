@@ -377,3 +377,179 @@ def test_auth_audit_logs_record_events_without_secrets():
         log_str = str(log)
         assert "SecPassword123!" not in log_str
         assert "WrongPasswordAttempt" not in log_str
+
+
+# ============================================================
+# 8. REGRESSION TESTS: PHASE 8 ADMINISTRATION FIXES
+# ============================================================
+
+def test_user_listing_schema_alignment_and_optional_last_login():
+    """
+    Regression test for User Management:
+    Ensures user listing preserves database schema (last_login_at), provides last_login alias,
+    gracefully handles unauthenticated users without inventing fake values, and renders safely in DataFrame.
+    """
+    import pandas as pd
+
+    setup_initial_admin("lead_admin", "AdminPassword123!", display_name="Lead Admin")
+    analyst = create_user("new_analyst", "AnalystSecret123!", role="analyst", display_name="New Analyst")
+
+    # 1. Direct auth_service list_users
+    users = list_users()
+    assert len(users) >= 2
+
+    analyst_record = next(u for u in users if u["username"] == "new_analyst")
+    # New user who never logged in must have None for last_login_at and last_login without invented values
+    assert analyst_record.get("last_login_at") is None
+    assert analyst_record.get("last_login") is None
+    assert analyst_record["is_active"] is True
+    assert "password_hash" not in analyst_record
+
+    # 2. DataFrame rendering simulation matching Streamlit dashboard
+    df_users = pd.DataFrame(users)
+    login_col = "last_login_at" if "last_login_at" in df_users.columns else ("last_login" if "last_login" in df_users.columns else None)
+    assert login_col is not None
+
+    base_cols = ["user_id", "username", "role", "display_name", "is_active", "created_at"]
+    for c in base_cols:
+        assert c in df_users.columns
+
+    rendered_df = df_users[base_cols + [login_col]].rename(columns={
+        "user_id": "USER ID",
+        "username": "USERNAME",
+        "role": "ROLE",
+        "display_name": "DISPLAY NAME",
+        "is_active": "ACTIVE",
+        "created_at": "CREATED AT",
+        login_col: "LAST LOGIN",
+    })
+    assert "LAST LOGIN" in rendered_df.columns
+    assert len(rendered_df) == len(users)
+
+    # 3. Authenticate analyst and verify last_login_at updates to real ISO timestamp
+    user_clean, err = authenticate_user("new_analyst", "AnalystSecret123!")
+    assert err is None
+    assert user_clean["last_login_at"] is not None
+    assert user_clean["last_login"] == user_clean["last_login_at"]
+
+    users_after_login = list_users()
+    updated_analyst = next(u for u in users_after_login if u["username"] == "new_analyst")
+    assert updated_analyst["last_login_at"] == user_clean["last_login_at"]
+    assert updated_analyst["last_login"] == user_clean["last_login_at"]
+
+    # 4. API endpoint test via TestClient
+    client = TestClient(app)
+    admin_auth = authenticate_user("lead_admin", "AdminPassword123!")[0]
+    admin_sess = create_session(admin_auth)
+    headers = {"Authorization": f"Bearer {admin_sess['session_token']}"}
+
+    res = client.get("/api/users", headers=headers)
+    assert res.status_code == 200
+    api_users = res.json()["users"]
+    target_api_u = next(u for u in api_users if u["username"] == "new_analyst")
+    assert "last_login_at" in target_api_u
+    assert "last_login" in target_api_u
+
+
+def test_security_audit_logs_retrieval_and_dataframe_rendering():
+    """
+    Regression test for Security Audit Logs:
+    Ensures auth_audit_log schema fields (audit_id, event_type, username, actor, timestamp)
+    are preserved, API responses are unpacked correctly, and DataFrame renderer avoids missing-column errors.
+    """
+    import pandas as pd
+    from src.api.client import get_auth_audit_logs as client_get_audit_logs
+
+    setup_initial_admin("audit_admin", "AdminPassword123!")
+    authenticate_user("audit_admin", "AdminPassword123!")
+    authenticate_user("audit_admin", "WrongPassword!")
+
+    # 1. Direct auth_service get_auth_audit_logs
+    logs = get_auth_audit_logs(limit=50)
+    assert len(logs) >= 3
+
+    for entry in logs:
+        assert "audit_id" in entry
+        assert "event_type" in entry
+        assert "username" in entry
+        assert "actor" in entry
+        assert "timestamp" in entry
+        assert entry["audit_id"].startswith("AUTH-")
+
+    # 2. API endpoint /api/auth/audit via TestClient
+    client = TestClient(app)
+    admin_u = authenticate_user("audit_admin", "AdminPassword123!")[0]
+    admin_sess = create_session(admin_u)
+    headers = {"Authorization": f"Bearer {admin_sess['session_token']}"}
+
+    api_res = client.get("/api/auth/audit?limit=50", headers=headers)
+    assert api_res.status_code == 200
+    res_body = api_res.json()
+    assert "count" in res_body
+    assert "logs" in res_body
+    assert isinstance(res_body["logs"], list)
+
+    # 3. client.py helper unpacking
+    unpacked_logs = client_get_audit_logs(limit=50)
+    assert isinstance(unpacked_logs, list)
+    assert len(unpacked_logs) >= 3
+
+    # 4. Streamlit DataFrame rendering simulation with column rename
+    df_audit = pd.DataFrame(unpacked_logs)
+    expected_cols = ["audit_id", "event_type", "username", "actor", "timestamp"]
+    for col in expected_cols:
+        assert col in df_audit.columns
+
+    rendered_audit = df_audit[expected_cols].rename(columns={
+        "audit_id": "AUDIT ID",
+        "event_type": "EVENT",
+        "username": "TARGET USER",
+        "actor": "ACTOR",
+        "timestamp": "TIMESTAMP",
+    })
+    assert list(rendered_audit.columns) == ["AUDIT ID", "EVENT", "TARGET USER", "ACTOR", "TIMESTAMP"]
+    assert len(rendered_audit) >= 3
+
+
+def test_ml_readiness_model_paths_and_diagnostics_probe(monkeypatch):
+    """
+    Regression test for ML Readiness:
+    Ensures configured model paths match actual trained model artifacts, /ready endpoint reports
+    ml_engine_ready: True, and fallback occurs gracefully if model artifacts are truly missing.
+    """
+    from src.config import get_system_config_summary, STAGE1_MODEL_PATH, STAGE2_MODEL_PATH
+    from src.api.client import get_readiness as client_get_readiness
+
+    # 1. Configuration summary checks
+    cfg = get_system_config_summary()
+    assert cfg["stage1_model_exists"] is True
+    assert cfg["stage2_model_exists"] is True
+    assert Path(cfg["stage1_model_path"]).exists()
+    assert Path(cfg["stage2_model_path"]).exists()
+
+    # Model paths should resolve to actual trained model artifacts
+    assert "stage1_random_forest" in cfg["stage1_model_path"]
+    assert "stage2_attack_classifier" in cfg["stage2_model_path"]
+
+    # 2. FastAPI /ready probe via TestClient
+    client = TestClient(app)
+    ready_res = client.get("/ready")
+    assert ready_res.status_code == 200
+    ready_data = ready_res.json()
+    assert ready_data["status"] == "ready"
+    assert ready_data["ml_engine_ready"] is True
+    assert ready_data["database_ready"] is True
+
+    # 3. Client get_readiness probe
+    c_ready = client_get_readiness()
+    assert c_ready["ml_engine_ready"] is True
+    assert c_ready["status"] == "ready"
+
+    # 4. Genuine unavailability handling: when models are missing, report limitation clearly
+    monkeypatch.setenv("CYBERSENTINEL_STAGE1_MODEL_PATH", "/nonexistent/stage1/model")
+    cfg_missing = get_system_config_summary()
+    assert cfg_missing["stage1_model_exists"] is False
+
+    ready_res_missing = client.get("/ready")
+    assert ready_res_missing.status_code == 200
+    assert ready_res_missing.json()["ml_engine_ready"] is False

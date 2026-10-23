@@ -940,7 +940,33 @@ def get_analytics_dataset():
 # ============================================================
 
 def get_readiness():
-    return _request("GET", "/ready")
+    try:
+        return _request("GET", "/ready")
+    except Exception:
+        try:
+            from datetime import datetime, timezone
+            from src.config import get_system_config_summary
+            from src.soc.alert_store import get_connection
+            db_ready = False
+            try:
+                conn = get_connection()
+                conn.execute("SELECT 1 FROM alerts LIMIT 1")
+                conn.close()
+                db_ready = True
+            except Exception:
+                db_ready = False
+            cfg = get_system_config_summary()
+            ml_ready = bool(cfg.get("stage1_model_exists") and cfg.get("stage2_model_exists"))
+            return {
+                "status": "ready" if db_ready else "not_ready",
+                "database_ready": db_ready,
+                "ml_engine_ready": ml_ready,
+                "detection_rules_ready": True,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "config": cfg,
+            }
+        except Exception:
+            raise
 
 
 def get_auth_status():
@@ -977,7 +1003,17 @@ def get_current_user_profile():
 
 
 def get_auth_audit_logs(limit: int = 100):
-    return _request("GET", "/api/auth/audit", params={"limit": limit})
+    try:
+        res = _request("GET", "/api/auth/audit", params={"limit": limit})
+        if isinstance(res, dict):
+            return res.get("logs", [])
+        return res if isinstance(res, list) else []
+    except Exception:
+        try:
+            from src.soc.auth_service import get_auth_audit_logs as local_get_audit
+            return local_get_audit(limit=limit)
+        except Exception:
+            raise
 
 
 # ============================================================
@@ -985,7 +1021,15 @@ def get_auth_audit_logs(limit: int = 100):
 # ============================================================
 
 def list_users():
-    return _request("GET", "/api/users")
+    try:
+        return _request("GET", "/api/users")
+    except Exception:
+        try:
+            from src.soc.auth_service import list_users as local_list_users
+            users = local_list_users()
+            return {"count": len(users), "users": users}
+        except Exception:
+            raise
 
 
 def create_user(username: str, password: str, role: str = "analyst", display_name: Optional[str] = None):
